@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=0.13,<0.14"]
+build-backend = "maturin"
+
+[project]
+name = "hybrid"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+
+dependencies = [
+    "pulp>=2.6",
+    "cvxpy==1.2",
+    "inquirer==2.10",
+    "redis>=4.3"
+]
+
+
