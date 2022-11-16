@@ -90,6 +90,30 @@ x = [1, 2, 3, 4, 5, 6]
 
 print("A.x \n", A @ x)
 
-hybrid.test_initial_policy(scpm, msg_env)
+epsilon = 0.0001
+w = [1.0, 0.0]
+initP, initR, init_x, init_pi = hybrid.test_initial_policy(scpm, msg_env, w, epsilon)
 
+print("CSR TRANSITION MATRIX TO ARRAY")
+sciP = csr_matrix((initP.x, initP.p, initP.i), shape=(initP.m, initP.n)).toarray()
+for r in range(initP.m):
+    for c in range(initP.n):
+        print(f" {sciP[r, c]:.2} ", end=" ")
+    print()
+
+sciR = csr_matrix((initR.x, initR.p, initR.i), shape=(initR.m, initR.n)).toarray()
+print("CSR REWARDS MATRIX TO ARRAY")
+for r in range(initR.m):
+    for c in range(initR.n):
+        print(f" {sciR[r, c]:.2} ", end=" ")
+    print()
+
+
+sciP = csr_matrix((P.x, P.p, P.i), shape=(P.m, P.n)).toarray()
+
+w = [0.5, 0.5]
+
+hybrid.test_policy_optimisation(
+    scpm, msg_env, w, epsilon, init_x, init_pi
+)
 

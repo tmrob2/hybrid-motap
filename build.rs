@@ -1,6 +1,7 @@
 extern crate cc;
 
 fn main() {
+    println!("cargo:rerun-if-changed=clib/intelmkl/multiobj.c");
     cc::Build::new()
         .file("clib/intelmkl/multiobj.c")
         .file("clib/intelmkl/tests.c")

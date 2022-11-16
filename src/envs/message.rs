@@ -2,7 +2,8 @@ use std::borrow::Borrow;
 
 //use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use crate::{CxxMatrixf32, cpu_intial_policy};
+use crate::sparse::argmax::argmaxM;
+use crate::{CxxMatrixf32, cpu_intial_policy, adjust_value_vector, cpu_policy_optimisation};
 use crate::agent::env::Env;
 use crate::model::momdp::{product_mdp_bfs, choose_random_policy};
 use crate::model::scpm::SCPM;
@@ -121,8 +122,10 @@ pub fn thread_test(
 pub fn test_initial_policy(
     model: &SCPM,
     env: &MessageSender,
+    w: Vec<f32>, 
     epsilon: f32
-) where MessageSender: Env<State> {
+) -> (CxxMatrixf32, CxxMatrixf32, Vec<f32>, Vec<i32>)
+where MessageSender: Env<State> {
     // First step of the test is to construct an initial random policy
     // which can be chosen directly from the action vector which contains
     // the number of enabled actions in each of the states. 
@@ -140,12 +143,70 @@ pub fn test_initial_policy(
     // compute the initial random policy based on the enabled actions
     let pi = choose_random_policy(&pmdp);
     println!("Pi: {:?}", pi);
+    println!("Rm: {:?}", pmdp.R.m);
+    println!("Rn: {:?}", pmdp.R.n);
+    println!("Pm: {:?}", pmdp.P.m);
+    println!("Pn: {:?}", pmdp.P.n);
+
+    /*for (k, (s, q)) in pmdp.states.iter().enumerate() {
+        println!("sidx: {}, (s:{}, q:{})", k, s, q);
+    }*/
+
+    // construct the matrices under the initial random policy.
+    let rowblock = pmdp.states.len() as i32;
+    let pcolblock = rowblock as i32;
+    let rcolblock = (model.num_agents + model.tasks.size) as i32;
+    let initP = argmaxM(&pmdp.P, &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
+    let initR = argmaxM(&pmdp.R, &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
+
+
+    // using the random policy determine the value of the intial policy
+    let mut r_v: Vec<f32> = vec![0.; initR.m as usize];
+    let mut x: Vec<f32> = vec![0.; initP.n as usize];
+    let mut y: Vec<f32> = vec![0.; initP.m as usize];
+    cpu_intial_policy(&initP, &initR, &mut r_v, &w, &mut x, &mut y, epsilon);
+
+    /*let init_value_vector_adj = adjust_value_vector(
+        &x, &pmdp.adjusted_state_act_pair, &pmdp.enabled_actions, pmdp.P.m as usize
+    );*/
+
+    (initP, initR, x.to_owned(), pi)
+
+}
+
+#[pyfunction]
+pub fn test_policy_optimisation(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>, 
+    epsilon: f32,
+    mut x: Vec<f32>,
+    mut pi: Vec<i32>
+) -> ()
+where MessageSender: Env<State> {
+    // First step of the test is to construct an initial random policy
+    // which can be chosen directly from the action vector which contains
+    // the number of enabled actions in each of the states. 
+    println!("Policy\n{:?}", pi);
+    println!("Init value vec:\n{:?}", x);
+
+    let pmdp = product_mdp_bfs(
+        (env.get_init_state(0), 0), 
+        env.clone(), 
+        model.tasks.get_task(0), 
+        0, 
+        0, 
+        model.num_agents, 
+        model.num_agents + model.tasks.size, 
+        &model.actions
+    );
 
     // using the random policy determine the value of the intial policy
     let mut r_v: Vec<f32> = vec![0.; pmdp.R.m as usize];
-    let mut x: Vec<f32> = vec![0.; pmdp.P.m as usize];
     let mut y: Vec<f32> = vec![0.; pmdp.P.m as usize];
-    cpu_intial_policy(&pmdp.P, &pmdp.R, &mut r_v, &mut x, &mut y, epsilon);
-    
+    cpu_policy_optimisation(&pmdp.P, &pmdp.R, &mut r_v, &w, 
+        &mut x, &mut y, &mut pi, &pmdp.enabled_actions, 
+        &pmdp.adjusted_state_act_pair, epsilon);
 
+    println!("x: {:?}", x);
 }

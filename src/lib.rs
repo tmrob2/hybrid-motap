@@ -12,6 +12,42 @@ use model::scpm::SCPM;
 use pyo3::prelude::*;
 use task::dfa::{DFA, Mission};
 use envs::message::*;
+use hashbrown::HashMap;
+use std::hash::Hash;
+
+
+/*
+-------------------------------------------------------------------
+|                          HELPER FUNCTIONS                       |
+|                                                                 |
+-------------------------------------------------------------------
+*/
+
+pub fn reverse_key_value_pairs<T, U>(map: &HashMap<T, U>) -> HashMap<U, T> 
+where T: Clone + Hash, U: Clone + Hash + Eq {
+    map.into_iter().fold(HashMap::new(), |mut acc, (a, b)| {
+        acc.insert(b.clone(), a.clone());
+        acc
+    })
+}
+
+/// x is the output from the initial value vector computation
+/// enabled actions are per state i.e. A(s)
+/// size is the ajust size of the data structure |S| .A(s) forall s in S
+pub fn adjust_value_vector(
+    x: &[f32], 
+    adjusted_s0: &[i32], 
+    enabled_actions: &[i32], 
+    size: usize
+) -> Vec<f32> {
+    let mut z: Vec<f32> = vec![0.; size];
+    for k in 0..x.len() {
+        for act in 0..enabled_actions[k] {
+            z[(adjusted_s0[k] + act) as usize] = x[k];
+        }
+    }
+    z
+}
 
 /*
 -------------------------------------------------------------------
@@ -76,6 +112,7 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(thread_test, m)?)?;
     m.add_function(wrap_pyfunction!(mkl_test, m)?)?;
     m.add_function(wrap_pyfunction!(test_initial_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(test_policy_optimisation, m)?)?;
     //m.add_function(wrap_pyfunction!(csr_impl_test, m)?)?;
     Ok(())
 }
@@ -162,6 +199,7 @@ extern "C" {
         rm: i32,
         rn: i32,
         r_v: *mut f32,
+        w: *const f32,
         x: *mut f32,
         y: *mut f32,
         epsilon: f32
@@ -172,6 +210,7 @@ pub fn cpu_intial_policy(
     P: &CxxMatrixf32,
     R: &CxxMatrixf32,
     r_v: &mut [f32],
+    w: &[f32],
     x: &mut [f32],
     y: &mut [f32],
     epsilon: f32
@@ -185,14 +224,76 @@ pub fn cpu_intial_policy(
             P.n, 
             R.i.as_ptr(), 
             R.p.as_ptr(), 
-            P.x.as_ptr(), 
+            R.x.as_ptr(), 
             R.m, 
             R.n, 
             r_v.as_mut_ptr(), 
+            w.as_ptr(),
             x.as_mut_ptr(), 
             y.as_mut_ptr(), 
             epsilon
         )
+    }
+}
+
+extern "C" {
+    fn policy_optimisation(
+        p_row_ptr: *const i32,
+        p_col_prt: *const i32,
+        p_vals: *const f32,
+        pm: i32,
+        pn: i32,
+        r_row_ptr: *const i32,
+        r_col_ptr: *const i32,
+        r_vals: *const f32,
+        rm: i32,
+        rn: i32,
+        r_v: *mut f32,
+        w: *const f32,
+        x: *mut f32,
+        y: *mut f32,
+        pi: *mut i32,
+        enabled_actions: *const i32,
+        adj_sidx: *const i32,
+        epsilon: f32,
+        N: i32
+    );
+}
+
+pub fn cpu_policy_optimisation(
+    P: &CxxMatrixf32,
+    R: &CxxMatrixf32,
+    r_v: &mut [f32],
+    w: &[f32],
+    x: &mut [f32],
+    y: &mut [f32],
+    pi: &mut [i32],
+    enabled_actions: &[i32],
+    adjusted_s0: &[i32],
+    epsilon: f32
+) {
+    unsafe {
+        policy_optimisation(
+            P.i.as_ptr(), 
+            P.p.as_ptr(), 
+            P.x.as_ptr(), 
+            P.m, 
+            P.n, 
+            R.i.as_ptr(), 
+            R.p.as_ptr(), 
+            R.x.as_ptr(), 
+            R.m, 
+            R.n, 
+            r_v.as_mut_ptr(), 
+            w.as_ptr(), 
+            x.as_mut_ptr(), 
+            y.as_mut_ptr(), 
+            pi.as_mut_ptr(),
+            enabled_actions.as_ptr(),
+            adjusted_s0.as_ptr(),
+            epsilon,
+            x.len() as i32
+        );
     }
 }
 

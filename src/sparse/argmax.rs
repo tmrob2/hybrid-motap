@@ -25,7 +25,7 @@ pub fn argmaxM(
     pi: &[i32], 
     row_block: i32, 
     col_block: i32,
-    sidx_offset: &HashMap<i32, i32>
+    sidx_offset: &[i32]
 ) -> CxxMatrixf32 {
     /*let ridx = pi.iter()
         .enumerate()
@@ -35,20 +35,24 @@ pub fn argmaxM(
     let mut newM = CxxMatrixf32::new();
     let mut nz = 0;
 
-    assert_eq!(row_block, pi.len() as i32);
+    //assert_eq!(row_block, pi.len() as i32);
+
+    //println!("Argmax choices");
 
     for r in 0..row_block as usize {
         //let rowlookup = ridx[r] as usize;
-        let mut rowlookup = *sidx_offset.get(&(r as i32)).unwrap() as usize;
+        let mut rowlookup = sidx_offset[r] as usize;
         // now which action is it?
         rowlookup += pi[r] as usize;
+        //println!("r: {} => r0: {}", r, rowlookup);
         let k = (M.i[rowlookup + 1] - M.i[rowlookup]) as usize;
         if k > 0 {
             for j_ in 0..k {
+                // TODO we might need to interpret the j_ index here
                 if M.x[M.i[rowlookup] as usize + j_] != 0. {
                     newM.triple_entry(
-                        r as i32, 
-                        M.p[M.i[rowlookup] as usize + j_] - pi[r] * col_block, 
+                        r as i32, // the row will be different
+                        M.p[M.i[rowlookup] as usize + j_], // the column will be the same column 
                         M.x[M.i[rowlookup] as usize + j_]
                     );
                     nz += 1;
