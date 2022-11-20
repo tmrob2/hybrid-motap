@@ -114,7 +114,7 @@ int initial_policy(
 {
     // Need to set the problem to a sequential threading problem as we will use
     // multithreading to constrol the CPU/GPU resource sharing
-    mkl_set_threading_layer(1);
+    //mkl_set_threading_layer(1);
     struct matrix_descr descrA;
     MKL_INT PM = pm, PN = pn, RM = rm, RN = rn;
     float alpha = 1.0, beta = 0.0, beta1 = 1.0, eps = 1.;
@@ -200,7 +200,7 @@ int initial_policy(
         printf("\n");
         */
 
-        //printf("EPS after %i iteration: %.3f\n", algo_k, eps);
+        printf("EPS after %i iteration: %.3f\n", algo_k, eps);
         // x <- y  update the value vector with the calculated R + Pv vector
         // y <- r  reset y to the rewards vector
         cblas_scopy(PM, y, 1, x, 1);
@@ -330,6 +330,5 @@ int policy_optimisation(
 exit:
     mkl_sparse_destroy(csrP);
     mkl_sparse_destroy(csrR);
-    free(xtmp);
     return exit_status;
 }

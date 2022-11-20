@@ -4,7 +4,8 @@ use std::hash::Hash;
 use rand::Rng;
 
 use hashbrown::{HashMap, HashSet};
-use crate::{CxxMatrixf32, reverse_key_value_pairs};
+use sprs::{CsMatBase, TriMat};
+use crate::reverse_key_value_pairs;
 use crate::agent::env::Env;
 use crate::sparse::compress;
 use crate::task::dfa::DFA;
@@ -13,8 +14,8 @@ pub struct MOProductMDP<S> {
     pub initial_state: (S, i32),
     pub states: Vec<(S, i32)>,
     pub actions: Vec<i32>,
-    pub P: CxxMatrixf32,
-    pub R: CxxMatrixf32,
+    pub P: CsMatBase<f32, usize, Vec<usize>, Vec<usize>, Vec<f32>>,
+    pub R: CsMatBase<f32, usize, Vec<usize>, Vec<usize>, Vec<f32>>,
     pub agent_id: i32, 
     pub task_id: i32,
     pub adjusted_state_act_pair: Vec<i32>, 
@@ -34,27 +35,6 @@ pub fn choose_random_policy<S>(mdp: &MOProductMDP<S>) -> Vec<i32> {
     pi
 }
 
-fn rewards(
-    R: &mut CxxMatrixf32,
-    q: i32, 
-    sidx: usize,
-    task: &DFA,
-    num_agents: i32,
-    agent_idx: i32,
-    task_idx: i32
-) {
-    if task.accepting.contains(&q)
-        || task.done.contains(&q)
-        || task.rejecting.contains(&q) {
-        // do nothing
-    } else {
-        R.triple_entry(sidx as i32, agent_idx, -1.);
-    }
-    if task.accepting.contains(&q) {
-        R.triple_entry(sidx as i32, task_idx + num_agents, 1.0);
-    }
-}
-
 impl<S> MOProductMDP<S>
 where S: Copy + Eq + Hash {
     pub fn new(
@@ -67,8 +47,8 @@ where S: Copy + Eq + Hash {
             initial_state, 
             states: Vec::new(), 
             actions: actions.to_vec(), 
-            P: CxxMatrixf32::new(), 
-            R: CxxMatrixf32::new(), 
+            P: CsMatBase::empty(sprs::CompressedStorage::CSR, 0), 
+            R: CsMatBase::empty(sprs::CompressedStorage::CSR, 0), 
             agent_id, 
             task_id, 
             adjusted_state_act_pair: Vec::new(),
@@ -91,7 +71,7 @@ where S: Copy + Eq + Hash {
 
 pub fn product_mdp_bfs<S, E>(
     initial_state: (S, i32),
-    mdp: E,
+    mdp: &E,
     task: DFA,
     agent_id: i32, 
     task_id: i32,
@@ -108,6 +88,16 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
     let mut stack: VecDeque<(S, i32)> = VecDeque::new();
     let mut adjusted_state_action: HashMap<i32, i32> = HashMap::new();
     let mut enabled_actions: HashMap<i32, i32> = HashMap::new();
+
+    // construct a new triple matrix fo rthe transitions and the rewards
+    // Transition triples
+    let mut prows: Vec<usize> = Vec::new();
+    let mut pcols: Vec<usize> = Vec::new();
+    let mut pvals: Vec<f32> = Vec::new();
+    // Rewards triples
+    let mut rrows: Vec<usize> = Vec::new();
+    let mut rcols: Vec<usize> = Vec::new();
+    let mut rvals: Vec<f32> = Vec::new();
 
     stack.push_back(initial_state);
     visited.insert(initial_state);
@@ -132,15 +122,16 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
                         }
                         if !state_rewards.contains(&(row_idx + action as i32)) {
                             //println!("s: {:?}, @s: {}, q: {}, a: {}", s, row_idx as usize + action, q, action);
-                            rewards(
-                                &mut pmdp.R, 
-                                q, 
-                                row_idx as usize + action, 
-                                &task, 
-                                n_agents as i32, 
-                                agent_id, 
-                                task_id
-                            );
+                            if task.accepting.contains(&q)
+                                || task.done.contains(&q)
+                                || task.rejecting.contains(&q) {
+                                // do nothing
+                            } else {
+                                rrows.push(row_idx as usize + action as usize); rcols.push(agent_id as usize); rvals.push(-1.);
+                            }
+                            if task.accepting.contains(&q) {
+                                rrows.push(row_idx as usize + action as usize); rcols.push(task_id as usize + n_agents as usize); rvals.push(1.);
+                            }
                             state_rewards.insert(row_idx + action as i32);
                         }
                         // plus one to the state-action pair conversion
@@ -163,11 +154,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
                                 .get(&(*sprime, qprime))
                                 .unwrap();
                             // add in the transition to the CxxMatrix
-                            pmdp.P.triple_entry(
-                                row_idx + action as i32, 
-                                sprime_idx as i32, 
-                                *p
-                            );
+                            prows.push(row_idx as usize + action as usize); pcols.push(sprime_idx); pvals.push(*p);
                             largest_row = row_idx + action as i32 + 1;
                             //println!("s: {:?}, @s: {}, q: {}, a: {}, sidx':{}. s': {:?}, q': {}, p: {}, w: {}", 
                             //   s, row_idx + action as i32, q, action, sprime_idx,sprime, qprime, p, w);
@@ -178,18 +165,17 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
             }
         }
     }
-    pmdp.P.m = largest_row;
-    pmdp.P.n = pmdp.states.len() as i32;
-    pmdp.P.nzmax = pmdp.P.nz + 1;
-    pmdp.R.m = largest_row;
-    pmdp.R.n = n_objs as i32;
-    pmdp.R.nzmax = pmdp.R.nz + 1;
-
+    let pTriMatr = TriMat::from_triplets(
+        (largest_row as usize, pmdp.states.len()), prows, pcols, pvals
+    );
+    let rTriMatr = TriMat::from_triplets(
+        (largest_row as usize, n_objs), rrows, rcols, rvals
+    );    
     //println!("enabled actions \n{:?}", enabled_actions);
 
-    let mut vadj_pairs: Vec<i32> = vec![0; pmdp.P.n as usize];
-    let mut venbact: Vec<i32> = vec![0; pmdp.P.n as usize];
-    for sidx in 0..pmdp.P.n as usize {
+    let mut vadj_pairs: Vec<i32> = vec![0; pmdp.states.len()];
+    let mut venbact: Vec<i32> = vec![0; pmdp.states.len()];
+    for sidx in 0..pmdp.states.len() {
         vadj_pairs[sidx] = adjusted_state_action.remove(&(sidx as i32)).unwrap();
         venbact[sidx] = enabled_actions.remove(&(sidx as i32)).unwrap();
     }
@@ -198,7 +184,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
     pmdp.enabled_actions = venbact;
     
     // compress the matrices into CSR format
-    pmdp.P = compress::compress(pmdp.P);
-    pmdp.R = compress::compress(pmdp.R);
+    pmdp.P = pTriMatr.to_csr();
+    pmdp.R = rTriMatr.to_csr();
     pmdp
 }

@@ -1,21 +1,11 @@
 extern crate cc;
 
 fn main() {
-    println!("cargo:rerun-if-changed=clib/intelmkl/multiobj.c");
+    println!("cargo:rerun-if-changed=clib/sparse/spmat.c");
     cc::Build::new()
-        .file("clib/intelmkl/multiobj.c")
-        .file("clib/intelmkl/tests.c")
-        //.file("myclib/test_array_csr.c")
-        .include("/opt/intel/oneapi/mkl/2022.2.1/include/")
+        .file("clib/sparse/spmat.c")
         .compile("mycfuncs");
 
-    /*println!("cargo:rustc-link-search=native=/opt/intel/oneapi/mkl/2022.2.1/lib/intel64");
-    println!("cargo:rustc-link-lib=mkl_intel_ilp64");
-    println!("cargo:rustc-link-lib=mkl_sequential");
-    println!("cargo:rustc-link-lib=mkl_core");
-    println!("cargo:rustc-link-lib=m");
-    println!("cargo:rustc-link-lib=dl");
-    println!("cargo:rustc-link-lib=pthread")
-    */
-    println!("cargo:rustc-link-lib=mkl_rt");
+    //println!("cargo:rustc-link-search=native=/usr/local/lib");
+    //println!("cargo:rustc-link-lib=static=blis");
 }

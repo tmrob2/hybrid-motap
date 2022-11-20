@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
-pub mod threading;
 pub mod model;
 pub mod agent;
 pub mod task;
 pub mod envs;
 pub mod algorithms;
 pub mod sparse;
+pub mod tests;
 
 use envs::message::MessageSender;
 use model::scpm::SCPM;
@@ -13,7 +13,13 @@ use pyo3::prelude::*;
 use task::dfa::{DFA, Mission};
 use envs::message::*;
 use hashbrown::HashMap;
-use std::hash::Hash;
+use std::{hash::Hash};
+
+extern crate blas_src;
+extern crate cblas_sys;
+
+
+
 
 
 /*
@@ -49,6 +55,19 @@ pub fn adjust_value_vector(
     z
 }
 
+pub fn product(
+    r1: std::ops::Range<usize>, 
+    r2: std::ops::Range<usize>
+) -> Vec<(usize, usize)> {
+    let mut v: Vec<(usize, usize)> = Vec::with_capacity(r1.end * r2.end);
+    for k1 in r1.start..r1.end {
+        for k2 in r2.start..r2.end {
+            v.push((k1, k2));
+        } 
+    }
+    v
+}
+
 /*
 -------------------------------------------------------------------
 |                     SPARSE MATRIX DEFINITIONS                   |
@@ -75,6 +94,19 @@ pub struct CxxMatrixf32 {
     #[pyo3(get)]
     pub nz: i32, //non zero entries
 }
+
+#[repr(C)]
+pub struct CSparse {
+    nzmax: ::std::os::raw::c_int,
+    m: ::std::os::raw::c_int,
+    n: ::std::os::raw::c_int,
+    p: *const ::std::os::raw::c_int,
+    i: *const ::std::os::raw::c_int,
+    x: *const f32,
+    nz: i32
+}
+
+pub type cmat = CSparse;
 
 impl CxxMatrixf32 {
     pub fn make(nzmax: i32, m: i32, n: i32, _nz: i32) -> Self {
@@ -109,11 +141,8 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<MessageSender>()?;
     m.add_class::<SCPM>()?;
     m.add_function(wrap_pyfunction!(test_build, m)?)?;
-    m.add_function(wrap_pyfunction!(thread_test, m)?)?;
-    m.add_function(wrap_pyfunction!(mkl_test, m)?)?;
     m.add_function(wrap_pyfunction!(test_initial_policy, m)?)?;
-    m.add_function(wrap_pyfunction!(test_policy_optimisation, m)?)?;
-    //m.add_function(wrap_pyfunction!(csr_impl_test, m)?)?;
+    m.add_function(wrap_pyfunction!(test_threaded_initial_policy, m)?)?;
     Ok(())
 }
 
@@ -142,234 +171,38 @@ pub fn cblas_ddot_ffi(n: i32, x: &[f32], y: &mut [f32]) {
 }*/
 /*
 -------------------------------------------------------------------
-|                         MKL FUNCTIONS                           |
+|                     C_SPARSE MATRIX FUNCTIONS                   |
 |                                                                 |
 -------------------------------------------------------------------
 */
 
 extern "C" {
-    fn test_blas_routine() -> f32;
+    fn create_csr(m: i32, n: i32, nz: i32, i: *const i32, p: *const i32, x: *const f32) -> *const cmat;
+    fn sp_spfree(sp: *const cmat);
+    fn gaxpy(A: *const cmat, x: *const f32, y: *mut f32);
 }
 
-#[pyfunction]
-pub fn mkl_test() -> f32 {
-    let r: f32; 
-    unsafe {
-        r = test_blas_routine();
-    }
-    r
-}
-
-extern "C" {
-    fn test_mv(
-        i: *const i32, 
-        p: *const i32, 
-        x: *const f32, 
-        m: i32,
-        n: i32,
-        x: *const f32,
-        y: *mut f32
-    );
-}
-
-pub fn mkl_test_mv(M: &CxxMatrixf32, x: &[f32], y: &mut [f32]) {
-    unsafe {
-        test_mv(
-            M.i.as_ptr(), 
-            M.p.as_ptr(), 
-            M.x.as_ptr(), 
-            M.m,
-            M.n,
-            x.as_ptr(),
-            y.as_mut_ptr()
-        )
+pub fn ffi_spfree(A: *const cmat) {
+    unsafe{
+        sp_spfree(A)
     }
 }
 
-extern "C" {
-    fn initial_policy(
-        p_row_ptr: *const i32,
-        p_col_ptr: *const i32,
-        p_vals: *const f32,
-        pm: i32,
-        pn: i32,
-        r_row_ptr: *const i32,
-        r_col_ptr: *const i32,
-        r_vals: *const f32,
-        rm: i32,
-        rn: i32,
-        r_v: *mut f32,
-        w: *const f32,
-        x: *mut f32,
-        y: *mut f32,
-        epsilon: f32
-    );
+pub fn ffi_create_csr(M: &CxxMatrixf32) -> *const cmat {
+    unsafe {
+        create_csr(M.m, M.n, M.nz, 
+            M.i.as_ptr(), M.p.as_ptr(), M.x.as_ptr())
+    }
 }
 
-pub fn cpu_intial_policy(
-    P: &CxxMatrixf32,
-    R: &CxxMatrixf32,
-    r_v: &mut [f32],
-    w: &[f32],
-    x: &mut [f32],
-    y: &mut [f32],
-    epsilon: f32
-) {
+pub fn ffi_gaxpy(A: *const cmat, x: &[f32], y: &mut [f32]) {
     unsafe { 
-        initial_policy(
-            P.i.as_ptr(), 
-            P.p.as_ptr(), 
-            P.x.as_ptr(), 
-            P.m, 
-            P.n, 
-            R.i.as_ptr(), 
-            R.p.as_ptr(), 
-            R.x.as_ptr(), 
-            R.m, 
-            R.n, 
-            r_v.as_mut_ptr(), 
-            w.as_ptr(),
-            x.as_mut_ptr(), 
-            y.as_mut_ptr(), 
-            epsilon
-        )
+        gaxpy(A, x.as_ptr(), y.as_mut_ptr());
     }
 }
 
-extern "C" {
-    fn policy_optimisation(
-        p_row_ptr: *const i32,
-        p_col_prt: *const i32,
-        p_vals: *const f32,
-        pm: i32,
-        pn: i32,
-        r_row_ptr: *const i32,
-        r_col_ptr: *const i32,
-        r_vals: *const f32,
-        rm: i32,
-        rn: i32,
-        r_v: *mut f32,
-        w: *const f32,
-        x: *mut f32,
-        y: *mut f32,
-        pi: *mut i32,
-        enabled_actions: *const i32,
-        adj_sidx: *const i32,
-        epsilon: f32,
-        N: i32
-    );
-}
 
-pub fn cpu_policy_optimisation(
-    P: &CxxMatrixf32,
-    R: &CxxMatrixf32,
-    r_v: &mut [f32],
-    w: &[f32],
-    x: &mut [f32],
-    y: &mut [f32],
-    pi: &mut [i32],
-    enabled_actions: &[i32],
-    adjusted_s0: &[i32],
-    epsilon: f32
-) {
-    unsafe {
-        policy_optimisation(
-            P.i.as_ptr(), 
-            P.p.as_ptr(), 
-            P.x.as_ptr(), 
-            P.m, 
-            P.n, 
-            R.i.as_ptr(), 
-            R.p.as_ptr(), 
-            R.x.as_ptr(), 
-            R.m, 
-            R.n, 
-            r_v.as_mut_ptr(), 
-            w.as_ptr(), 
-            x.as_mut_ptr(), 
-            y.as_mut_ptr(), 
-            pi.as_mut_ptr(),
-            enabled_actions.as_ptr(),
-            adjusted_s0.as_ptr(),
-            epsilon,
-            x.len() as i32
-        );
-    }
-}
 
-/*
--------------------------------------------------------------------
-|                             TESTS                               |
-|                                                                 |
--------------------------------------------------------------------
-*/
-
-#[cfg(test)]
-mod tests {
-    use crate::mkl_test;
-    use crate::CxxMatrixf32;
-    use crate::mkl_test_mv;
-    #[test]
-    fn mkl() {
-        mkl_test();
-        //assert_eq!(result, 10.);
-    }
-
-    #[test]
-    fn mkl_spblas() {
-
-        println!("TESTING SQUARE MATRIX");
-        let row: Vec<i32> = vec![0, 3, 5, 8, 11, 13];
-        let col: Vec<i32> = vec![0, 1, 3, 0, 1, 2, 3, 4, 0, 2, 3, 1, 4]; 
-        let val: Vec<f32> = vec![1., -1., -3., -2., 5., 4., 6., 4., -4.,
-                                 2., 7., 8., -5.];
-        let nzmax = 13 + 1;
-        let m = 5;
-        let n = 5;
-        let x: Vec<f32> = vec![3.0, 2.0, 5.0, 4.0, 1.0];
-        let mut y: Vec<f32> = vec![0., 0., 0., 0., 0.];
-
-        let M = &CxxMatrixf32 { 
-            nzmax, 
-            m, 
-            n, 
-            p: col, 
-            i: row, 
-            x: val, 
-            nz: 13
-        };
-
-        mkl_test_mv(M, &x, &mut y);
-
-        assert_eq!(y, vec![-11., 4., 48., 26., 11.]);
-
-        println!("TESTING NON-SQUARE MATRIX");
-
-        let row: Vec<i32> = vec![0, 2, 4, 7, 8];
-        let col: Vec<i32> = vec![0, 1, 1, 3, 2, 3, 4, 5];
-        let val: Vec<f32> = vec![10., 20., 30., 40., 50., 60., 70., 80.];
-        let nzmax = 9;
-        let m = 4;
-        let n = 6;
-        let x: Vec<f32> = vec![1., 2., 3., 4., 5., 6.];
-        let mut y: Vec<f32> = vec![0., 0., 0., 0.];
-
-        let M2 = CxxMatrixf32 {
-            nzmax,
-            m,
-            n,
-            p: col,
-            i: row,
-            x: val,
-            nz: 8
-        };
-
-        mkl_test_mv(&M2, &x, &mut y);
-
-        assert_eq!(y, vec![50., 220., 740., 480.]);
-
-    }
-}
 
 
 

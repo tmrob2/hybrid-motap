@@ -32,38 +32,7 @@ dfa = message_sending_task(1)
 mission.add_task(dfa)
 scpm = hybrid.SCPM(mission, 1, list(range(2)))
 
-P, R = hybrid.test_build(scpm, msg_env)
-
-# convert the transition matrix and the rewards matrix into scipy matrices.
-from scipy.sparse import csr_matrix
-print("CSR TRANSITION MATRIX TO ARRAY")
-sciP = csr_matrix((P.x, P.p, P.i), shape=(P.m, P.n)).toarray()
-for r in range(P.m):
-    for c in range(P.n):
-        print(f" {sciP[r, c]:.2} ", end=" ")
-    print()
-
-sciR = csr_matrix((R.x, R.p, R.i), shape=(R.m, R.n)).toarray()
-print("CSR REWARDS MATRIX TO ARRAY")
-for r in range(R.m):
-    for c in range(R.n):
-        print(f" {sciR[r, c]:.2} ", end=" ")
-    print()
-
-#print("THREAD TEST")
-#mission = hybrid.Mission()
-#
-#dfa = message_sending_task(100)
-#mission.add_task(dfa)
-#scpm = hybrid.SCPM(mission, 1, list(range(2)))
-#hybrid.thread_test(scpm, msg_env)
-
-print("MKL TEST BLAS")
-test_output = hybrid.mkl_test()
-print(f"MKL BLAS TEST: {test_output == 10.}")
-
-print("MKL SPARSE MATRIX CREATE TEST")
-#hybrid.csr_impl_test()
+hybrid.test_build(scpm, msg_env)
 
 import numpy as np
 
@@ -91,29 +60,18 @@ x = [1, 2, 3, 4, 5, 6]
 print("A.x \n", A @ x)
 
 epsilon = 0.0001
-w = [1.0, 0.0]
-initP, initR, init_x, init_pi = hybrid.test_initial_policy(scpm, msg_env, w, epsilon)
+w = [1.0, 0.]
+init_x, init_pi = hybrid.test_initial_policy(scpm, msg_env, w, epsilon)
 
-print("CSR TRANSITION MATRIX TO ARRAY")
-sciP = csr_matrix((initP.x, initP.p, initP.i), shape=(initP.m, initP.n)).toarray()
-for r in range(initP.m):
-    for c in range(initP.n):
-        print(f" {sciP[r, c]:.2} ", end=" ")
-    print()
+NUM_TASKS = 100
+NUM_AGENTS = 100
+print("x:", init_x)
+print("pi:", init_pi)
 
-sciR = csr_matrix((initR.x, initR.p, initR.i), shape=(initR.m, initR.n)).toarray()
-print("CSR REWARDS MATRIX TO ARRAY")
-for r in range(initR.m):
-    for c in range(initR.n):
-        print(f" {sciR[r, c]:.2} ", end=" ")
-    print()
-
-
-sciP = csr_matrix((P.x, P.p, P.i), shape=(P.m, P.n)).toarray()
-
-w = [0.5, 0.5]
-
-hybrid.test_policy_optimisation(
-    scpm, msg_env, w, epsilon, init_x, init_pi
-)
-
+w = [0.] * NUM_AGENTS + [1./NUM_TASKS] * NUM_TASKS
+mission = hybrid.Mission()
+for msg in range(NUM_TASKS):
+    dfa = message_sending_task(msg + 1)
+    mission.add_task(dfa)
+scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
+hybrid.test_threaded_initial_policy(scpm, msg_env, w, epsilon)
