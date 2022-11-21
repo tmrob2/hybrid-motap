@@ -6,4 +6,6 @@ pub trait Env<S> {
     fn set_task(&mut self, task_id: usize);
 
     fn get_action_space(&self) -> Vec<i32>;
+
+    fn get_states_len(&self) -> usize;
 }

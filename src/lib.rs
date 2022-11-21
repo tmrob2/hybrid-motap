@@ -68,6 +68,29 @@ pub fn product(
     v
 }
 
+pub fn select_task_agent_pairs<S, E>(
+    model: &SCPM, env: &E, mut pairs: Vec<(usize, usize)>, GPU_BUFFER_SIZE: usize
+) -> (Vec<(usize, usize)>, Vec<(usize, usize)>)
+where E: crate::agent::env::Env<S> {
+    // compute the expected size of the product for a particular pair
+    let env_statespace = env.get_states_len();
+    let mut gpu_buffer = 0;
+    let mut gpu_pairs = Vec::new();
+    for _ in 0..pairs.len(){
+        let (a, t) = pairs.pop().unwrap();
+        let size_ = 
+            model.tasks.get_task(t).states.len() * env_statespace;
+        gpu_buffer += size_;
+        if gpu_buffer > GPU_BUFFER_SIZE {
+            gpu_buffer = 0;
+            break;
+        }
+        gpu_pairs.push((a, t));
+    }
+    // return the remaining pairs
+    (pairs, gpu_pairs)
+}
+
 /*
 -------------------------------------------------------------------
 |                     SPARSE MATRIX DEFINITIONS                   |
@@ -143,6 +166,7 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_build, m)?)?;
     m.add_function(wrap_pyfunction!(test_initial_policy, m)?)?;
     m.add_function(wrap_pyfunction!(test_threaded_initial_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(experiment_gpu_cpu_binary_thread, m)?)?;
     Ok(())
 }
 

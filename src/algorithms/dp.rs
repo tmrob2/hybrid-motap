@@ -104,9 +104,10 @@ pub fn optimal_policy(
     y: &mut [f32], // the size of x and y will be different. 
     pi: &mut [i32], // the size of the policy will be equivalent to |x|
     enabled_actions: &[i32],
-    adj_sidx: &[i32]
-) {
-    let mut eps = 1.0;
+    adj_sidx: &[i32],
+    initial_state_index: usize
+) -> f32 {
+    let mut _eps = 1.0;
     let mut policy_stable = false;
     let mut xtmp = vec![0.; x.len()];
     // First thing is to construct the sparse rewards matrix R.w dot product
@@ -123,12 +124,13 @@ pub fn optimal_policy(
         //println!("y before  P.v: \n{:?}", y);
         mul_acc_mat_vec_csr(P, &*x, &mut *y);
 
-        (policy_stable, eps) = action_comparison(y, enabled_actions, adj_sidx, 
+        (policy_stable, _eps) = action_comparison(y, enabled_actions, adj_sidx, 
                                             &mut xtmp, x, pi, epsilon);
         for (i, x_) in x.iter_mut().enumerate() {
             *x_ = xtmp[i];
         }
 
-        println!("eps: {}", eps);
+        //println!("eps: {}", eps);
     }
+    x[initial_state_index]
 }
