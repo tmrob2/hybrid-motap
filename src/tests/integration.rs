@@ -4,15 +4,18 @@
 |                                                                 |
 -------------------------------------------------------------------
 */
+
+// BLAS Tests are currently commented out. Will need to uncomment and
+// load cblas/blis src in Cargo.toml file
 use crossbeam_channel::unbounded;
 use threadpool::ThreadPool;
 use std::sync::mpsc::channel;
-use cblas_sys::{cblas_dgemm, CBLAS_LAYOUT, CBLAS_TRANSPOSE};
+//use cblas_sys::{cblas_dgemm, CBLAS_LAYOUT, CBLAS_TRANSPOSE};
 use crate::{CxxMatrixf32, ffi_create_csr, ffi_gaxpy, ffi_spfree};
 use sprs::CsMat;
 use sprs::prod::mul_acc_mat_vec_csr;
 
-pub fn test_blis_threads() {
+/*pub fn test_blis_threads() {
 
     let EVENTS = 100;
     let pool = ThreadPool::new(16);
@@ -54,9 +57,9 @@ pub fn test_blis_threads() {
     for k in 0..EVENTS {
         output[k] = rx.recv().unwrap();
     }
-}
+}*/
 
-pub fn test_cb_threads(num_threads: usize) {
+/*pub fn test_cb_threads(num_threads: usize) {
 
     let EVENTS = 1000;
     let pool = ThreadPool::new(num_threads);
@@ -84,19 +87,19 @@ pub fn test_cb_threads(num_threads: usize) {
                 4.0, 2.0,
             ];
 
-            unsafe {
+            /*unsafe {
                 cblas_dgemm(CBLAS_LAYOUT::CblasColMajor, 
                     CBLAS_TRANSPOSE::CblasNoTrans, 
                     CBLAS_TRANSPOSE::CblasNoTrans,
                     m, n, k, 1.0, a.as_ptr(), m, 
                     b.as_ptr(), k, 1.0, c.as_mut_ptr(), m);
-            }
+            }*/
             tx_.send(1).unwrap();
         });
     }
     drop(tx);
     let _output: Vec<_> = rx.iter().collect();
-}
+}*/
 
 use rayon::prelude::*;
 use ndarray::prelude::*;
@@ -125,7 +128,7 @@ pub fn test_rayon_threads(num: usize) {
 
 use std::thread;
 
-pub fn test_explicit_threads_size2() {
+/*pub fn test_explicit_threads_size2() {
 
     let TOTAL_SENDS: usize = 100000;
 
@@ -201,7 +204,7 @@ pub fn test_explicit_threads_size2() {
     // Receive all messages currently in the channel.
     let _v1: Vec<_> = r1.iter().collect();
     let _v2: Vec<_> = r2.iter().collect();
-}
+}*/
 
 pub fn matrix_mul_test() {
     /*let (m, n, k) = (2, 4, 3);

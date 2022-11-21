@@ -63,9 +63,9 @@ epsilon = 0.0001
 #w = [1.0, 0.]
 #init_x, init_pi = hybrid.test_initial_policy(scpm, msg_env, w, epsilon)
 #
-NUM_TASKS = 2
+NUM_TASKS = 4
 NUM_AGENTS = 2
-GPU_BUFFER_SIZE = 50
+GPU_BUFFER_SIZE = 60
 CPU_COUNT = 1
 #print("x:", init_x)
 #print("pi:", init_pi)

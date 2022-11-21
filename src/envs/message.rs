@@ -302,6 +302,14 @@ where MessageSender: Env<State> {
                                     m.num_agents + m.tasks.size, 
                                     &m.actions
                                 );
+                                // The product MDPs will need to be combined into a 
+                                // large matrix model and that data is then sent to the GPU
+                                
+                                // So we have a P, and R, but the rows and cols need editing
+                                println!("CSR details");
+                                println!("i: {:?}", pmdp.P.indptr().as_slice());
+                                println!("j: {:?}", pmdp.P.indices());
+                                println!("x: {:?}", pmdp.P.data());
                             }
                             thread::sleep(Duration::from_secs(5));
                             s2.send(99).unwrap();

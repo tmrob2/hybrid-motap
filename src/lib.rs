@@ -15,8 +15,8 @@ use envs::message::*;
 use hashbrown::HashMap;
 use std::{hash::Hash};
 
-extern crate blas_src;
-extern crate cblas_sys;
+//extern crate blas_src;
+//extern crate cblas_sys;
 
 
 
