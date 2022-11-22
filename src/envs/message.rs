@@ -321,7 +321,7 @@ where MessageSender: Env<State> {
             //Ok(data) => { println!("Received some data: {:?}", data); }
             //Err(e) => { println!("Received error: {:?}", e);}
         }
-        let msg = "thread closed successfully";
+        let msg = "GPU controller thread closed successfully";
         msg
     });
 
@@ -367,6 +367,8 @@ where MessageSender: Env<State> {
                 Err(_) => { }
             }
         }
+        let msg = "CPU controller thread closed successfully";
+        msg
     });
 
     // fill the initial GPU buffer and the CPU buffer with models
