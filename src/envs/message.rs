@@ -310,7 +310,7 @@ where MessageSender: Env<State> {
                             );
                             // send the data to CUDA to be processed and then returned to this thread
                             // so that we can send the processed data back to the main thread.                            
-                            thread::sleep(Duration::from_secs(5));
+                            thread::sleep(Duration::from_secs(1));
                             gpu_s2.send(99).unwrap();
                         }
                         _ => {}
@@ -358,7 +358,7 @@ where MessageSender: Env<State> {
 
                             // send the data to CUDA to be processed and then returned to this thread
                             // so that we can send the processed data back to the main thread.                            
-                            thread::sleep(Duration::from_secs(5));
+                            thread::sleep(Duration::from_secs(2));
                             cpu_s2.send(100).unwrap();
                         }
                         _ => { }
