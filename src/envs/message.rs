@@ -253,7 +253,6 @@ pub fn experiment_gpu_cpu_binary_thread(
     env: &MessageSender,
     w: Vec<f32>, 
     epsilon: f32,
-    GPU_BUFFER_SIZE: usize,
     CPU_COUNT: usize
 ) -> ()
 where MessageSender: Env<State> {

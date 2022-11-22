@@ -65,8 +65,7 @@ epsilon = 0.0001
 #
 NUM_TASKS = 4
 NUM_AGENTS = 2
-GPU_BUFFER_SIZE = 60
-CPU_COUNT = 1
+CPU_COUNT = 2
 #print("x:", init_x)
 #print("pi:", init_pi)
 
@@ -79,5 +78,5 @@ scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
 hybrid.test_threaded_initial_policy(scpm, msg_env, w, epsilon)
 
 hybrid.experiment_gpu_cpu_binary_thread(
-    scpm, msg_env, w, epsilon, GPU_BUFFER_SIZE, CPU_COUNT
+    scpm, msg_env, w, epsilon, CPU_COUNT
 )
