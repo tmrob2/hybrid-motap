@@ -243,7 +243,8 @@ where MessageSender: Env<State> {
 
 enum ControlMessage {
     Quit,
-    Data(Vec<(usize, usize)>),
+    Data((usize, usize)),
+    CPUData(Vec<(usize, usize)>)
 }
 
 #[pyfunction]
@@ -265,7 +266,6 @@ where MessageSender: Env<State> {
     // construct the product of all of the model, env pairs
     //let mut _v: Vec<MOProductMDP<State>> = Vec::with_capacity(model.num_agents * model.tasks.size);
     let mut w_init = vec![0.; model.num_agents + model.tasks.size];
-    let mut gpu_pairs;
 
     for k in 0..model.num_agents {
         w_init[k] = 1.;
@@ -277,43 +277,43 @@ where MessageSender: Env<State> {
     // if the product size sum is larger than the number of cuda cores then 
     // send this partition to a thread for processing
     
-    let (s1, r1) : (Sender<ControlMessage>, Receiver<ControlMessage>) = unbounded();
-    let (s2, r2) : (Sender<i32>, Receiver<i32>) = unbounded();
+    let (gpu_s1, gpu_r1) : (Sender<ControlMessage>, Receiver<ControlMessage>) = unbounded();
+    let (gpu_s2, gpu_r2) : (Sender<i32>, Receiver<i32>) = unbounded();
+
+    let (cpu_s1, cpu_r1) : (Sender<ControlMessage>, Receiver<ControlMessage>) = unbounded();
+    let (cpu_s2, cpu_r2) : (Sender<i32>, Receiver<i32>) = unbounded();
+
     let e = env.clone();
     let m = model.clone();
-    let thr = thread::spawn(move || {
+    let gpu_thread = thread::spawn(move || {
         loop {
-            match r1.try_recv() {
+            match gpu_r1.try_recv() {
                 Ok(data) => { 
                     match data {
                         ControlMessage::Quit => { break; }
                         // send the list items to oblivion
-                        ControlMessage::Data(x) => { 
-                            println!("Received data: {:?}", x);
-                            for (a, t) in x.into_iter() {
-                                // test building some models with the GPU
-                                let pmdp = product_mdp_bfs(
-                                    (e.get_init_state(a), 0), 
-                                    &e, 
-                                    m.tasks.get_task(t), 
-                                    a as i32, 
-                                    t as i32, 
-                                    m.num_agents, 
-                                    m.num_agents + m.tasks.size, 
-                                    &m.actions
-                                );
-                                // The product MDPs will need to be combined into a 
-                                // large matrix model and that data is then sent to the GPU
-                                
-                                // So we have a P, and R, but the rows and cols need editing
-                                println!("CSR details");
-                                println!("i: {:?}", pmdp.P.indptr().as_slice());
-                                println!("j: {:?}", pmdp.P.indices());
-                                println!("x: {:?}", pmdp.P.data());
-                            }
+                        ControlMessage::Data((a, t)) => { 
+
+                            // TODO we need to store the current sum of modified stat space size
+
+                            println!("Received data: ({},{})", a, t);
+
+                            let pmdp = product_mdp_bfs(
+                                (e.get_init_state(a), 0), 
+                                &e, 
+                                m.tasks.get_task(t), 
+                                a as i32, 
+                                t as i32, 
+                                m.num_agents, 
+                                m.num_agents + m.tasks.size, 
+                                &m.actions
+                            );
+                            // send the data to CUDA to be processed and then returned to this thread
+                            // so that we can send the processed data back to the main thread.                            
                             thread::sleep(Duration::from_secs(5));
-                            s2.send(99).unwrap();
+                            gpu_s2.send(99).unwrap();
                         }
+                        _ => {}
                     }
                 }
                 Err(_) => { }
@@ -325,43 +325,92 @@ where MessageSender: Env<State> {
         msg
     });
 
-    (pairs, gpu_pairs) = 
-        select_task_agent_pairs(model, env, pairs, GPU_BUFFER_SIZE);
-    println!("remaining pairs: {:?}", pairs);
-    println!("gpu pairs: {:?}", gpu_pairs);
-    // fill the initial GPU buffer
-    match s1.send(ControlMessage::Data(gpu_pairs)) {
-        Ok(_) => { }
-        Err(e) => { println!("err: {:?}", e); }
-    };
+    // Create another thread for the CPUs to do work on
+    let ecpu = env.clone();
+    let mcpu = model.clone();
+    let cpu_thread = thread::spawn(move || {
+        // continuously loop and wait for data to be sent to the CPU for allocation
+        loop {
+            match cpu_r1.try_recv() {
+                Ok(data) => { 
+                    match data {
+                        ControlMessage::Quit => { break; }
+                        // send the list items to oblivion
+                        ControlMessage::CPUData(x) => { 
+
+                            // do the Rayon allocation of threads. 
+                            println!("CPUs Received data: {:?}", x);
+
+                            // TODO we need to store the current sum of modified stat space size
+                            let _output: Vec<(usize, usize, f32)> = x.into_par_iter().map(|(a, t)| {
+                                let pmdp = product_mdp_bfs(
+                                    (ecpu.get_init_state(a), 0), 
+                                    &ecpu, 
+                                    mcpu.tasks.get_task(t), 
+                                    a as i32, 
+                                    t as i32, 
+                                    mcpu.num_agents, 
+                                    mcpu.num_agents + mcpu.tasks.size, 
+                                    &mcpu.actions
+                                );
+                                (a, t, 1.0)
+                            }).collect();
+
+                            // send the data to CUDA to be processed and then returned to this thread
+                            // so that we can send the processed data back to the main thread.                            
+                            thread::sleep(Duration::from_secs(5));
+                            cpu_s2.send(100).unwrap();
+                        }
+                        _ => { }
+                    }
+                }
+                Err(_) => { }
+            }
+        }
+    });
+
+    // fill the initial GPU buffer and the CPU buffer with models
+    gpu_s1.send(ControlMessage::Data(pairs.pop().unwrap())).unwrap();
+    cpu_s1.send(ControlMessage::CPUData(
+        pairs.drain(..std::cmp::min(CPU_COUNT, pairs.len())).collect())
+    ).unwrap();
     while pairs.len() > 0 {
-        match r2.try_recv() {
+        // First try and allocate the data to the GPU, if the GPU is free
+        // Otherwise try and allocate the data to the CPU if they are free
+        // If no device is free, then continue looping until one of the devices
+        // becomes free.
+        match gpu_r2.try_recv() {
             Ok(data) => { 
                 println!("Received some work product from the GPU: {:?}", data);
-                (pairs, gpu_pairs) = 
-                    select_task_agent_pairs(model, env, pairs, GPU_BUFFER_SIZE);
-                println!("Sending some more work to the GPU: [{:?}]", gpu_pairs);
-                s1.send(ControlMessage::Data(gpu_pairs)).unwrap();
+                let gpu_new_data = pairs.pop().unwrap();
+                println!("Sending some more work to the GPU: [{:?}]", gpu_new_data);
+                gpu_s1.send(ControlMessage::Data(gpu_new_data)).unwrap();
                 // TODO call GPU work here
                 // The GPU is a bit complicated, and we will need to send a copy of the
                 // model and the environment to the thread for constructing model. 
             }
             Err(_) => { 
-                // carve out a block of products to process on the CPU
-                let cpu_pairs: Vec<(usize, usize)> = 
-                    pairs.drain(0..std::cmp::min(CPU_COUNT, pairs.len())).collect();
-                println!("GPU still busy, doing some work on the CPU [{:?}]", cpu_pairs);
-                thread::sleep(Duration::from_secs(3));
-                // TODO call CPU work here
-                // The CPU is not too complicated because we will get access 
-                // to access to the global memory
+                // On receive error don't do anything, the GPU is not ready to take
+                // on new messages
             }
+        }
+
+        match cpu_r2.try_recv() {
+            Ok(data) => {
+                println!("Received some work product from the CPUs: {:?}", data);
+                let cpu_new_data: Vec<(usize, usize)> = pairs.drain(..CPU_COUNT).collect();
+                println!("Sending some more work to the CPU: {:?}", cpu_new_data);
+                cpu_s1.send(ControlMessage::CPUData(cpu_new_data)).unwrap();
+            }
+            Err(_) => { }
         }
     }
 
-    s1.send(ControlMessage::Quit).unwrap();
+    gpu_s1.send(ControlMessage::Quit).unwrap();
+    cpu_s1.send(ControlMessage::Quit).unwrap();
 
-    println!("{:?}", thr.join().unwrap());
+    println!("{:?}", cpu_thread.join().unwrap());
+    println!("{:?}", gpu_thread.join().unwrap());
     
 
 }
