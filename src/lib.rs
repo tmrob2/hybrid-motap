@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 pub mod model;
 pub mod agent;
 pub mod task;
@@ -7,20 +8,18 @@ pub mod algorithms;
 pub mod sparse;
 pub mod tests;
 
-use envs::message::MessageSender;
+//use envs::{message::MessageSender, warehouse::Warehouse};
 use model::scpm::SCPM;
 use pyo3::prelude::*;
+use sprs::{CsMatBase, CsMatViewI};
 use task::dfa::{DFA, Mission};
 use envs::message::*;
 use hashbrown::HashMap;
-use std::{hash::Hash};
+use std::hash::Hash;
+use envs::warehouse::*;
 
 //extern crate blas_src;
 //extern crate cblas_sys;
-
-
-
-
 
 /*
 -------------------------------------------------------------------
@@ -31,7 +30,8 @@ use std::{hash::Hash};
 
 pub fn reverse_key_value_pairs<T, U>(map: &HashMap<T, U>) -> HashMap<U, T> 
 where T: Clone + Hash, U: Clone + Hash + Eq {
-    map.into_iter().fold(HashMap::new(), |mut acc, (a, b)| {
+    map.into_iter().fold(HashMap::new(), 
+        |mut acc, (a, b)| {
         acc.insert(b.clone(), a.clone());
         acc
     })
@@ -68,27 +68,50 @@ pub fn product(
     v
 }
 
-pub fn select_task_agent_pairs<S, E>(
-    model: &SCPM, env: &E, mut pairs: Vec<(usize, usize)>, GPU_BUFFER_SIZE: usize
-) -> (Vec<(usize, usize)>, Vec<(usize, usize)>)
-where E: crate::agent::env::Env<S> {
-    // compute the expected size of the product for a particular pair
-    let env_statespace = env.get_states_len();
-    let mut gpu_buffer = 0;
-    let mut gpu_pairs = Vec::new();
-    for _ in 0..pairs.len(){
-        let (a, t) = pairs.pop().unwrap();
-        let size_ = 
-            model.tasks.get_task(t).states.len() * env_statespace;
-        gpu_buffer += size_;
-        if gpu_buffer > GPU_BUFFER_SIZE {
-            gpu_buffer = 0;
-            break;
+pub fn allocation_fn(
+    vi_output: &HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>>,
+    num_tasks: usize, 
+    num_agents: usize
+) -> Vec<(i32, i32, Vec<i32>)>{ 
+    let mut allocation: Vec<(i32, i32, Vec<i32>)> = Vec::new();
+    let mut task_counts_by_agent: Vec<i32> = vec![0; num_agents];
+    for task in 0..num_tasks {
+        let vals = vi_output.get(&(task as i32)).unwrap();
+        let mut min_best_val: Option<(i32, Vec<i32>, f32)> = None;
+        for i in 0..num_agents - 1 {
+            // cmp the current val with the next val
+            if vals[i].is_some() {
+                // always swap
+                if vals[i + 1].is_some() {
+                    // compare the two otherwise move on
+                    if (vals[i].as_ref().unwrap().2 + 
+                        task_counts_by_agent[vals[i].as_ref().unwrap().0 as usize] as f32) < 
+                        (vals[i + 1].as_ref().unwrap().2 + 
+                        task_counts_by_agent[vals[i + 1].as_ref().unwrap().0 as usize] as f32){
+                        min_best_val = vals[i].clone();
+                    } else {
+                        min_best_val = vals[i + 1].clone();
+                    }
+                } else {
+                    if min_best_val.is_none() {
+                        min_best_val = vals[i].clone();
+                    }
+                }
+            }
         }
-        gpu_pairs.push((a, t));
+        task_counts_by_agent[min_best_val.as_ref().unwrap().0 as usize] += 1;
+        /*println!("min best value: ({}, {})", 
+            min_best_val.as_ref().unwrap().0, min_best_val.as_ref().unwrap().2
+        );
+        println!("task counts: {:?}", task_counts_by_agent);
+        */
+        allocation.push((
+            task as i32,
+            min_best_val.as_ref().unwrap().0, 
+            min_best_val.as_ref().unwrap().1.to_owned()
+        ));
     }
-    // return the remaining pairs
-    (pairs, gpu_pairs)
+    allocation
 }
 
 /*
@@ -157,42 +180,363 @@ impl CxxMatrixf32 {
     }
 }
 
+/*
+-------------------------------------------------------------------
+|                         PYTHON INTERFACE                        |
+|                                                                 |
+-------------------------------------------------------------------
+*/
 #[pymodule]
 fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<DFA>()?;
     m.add_class::<Mission>()?;
     m.add_class::<MessageSender>()?;
     m.add_class::<SCPM>()?;
+    m.add_class::<Warehouse>()?;
     m.add_function(wrap_pyfunction!(test_build, m)?)?;
     m.add_function(wrap_pyfunction!(test_initial_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(test_cuda_initial_policy, m)?)?;
     m.add_function(wrap_pyfunction!(test_threaded_initial_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(test_cudacpu_opt_pol, m)?)?;
+    m.add_function(wrap_pyfunction!(msg_test_gpu_stream, m)?)?;
     m.add_function(wrap_pyfunction!(experiment_gpu_cpu_binary_thread, m)?)?;
+    m.add_function(wrap_pyfunction!(warehouse_build_test, m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_policy_optimisation,m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_model_size, m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_gpu_policy_optimisation, m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_CPU_only, m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_GPU_only, m)?)?;
+    m.add_function(wrap_pyfunction!(test_gpu_stream, m)?)?;
     Ok(())
 }
 
 /*
 -------------------------------------------------------------------
-|                         CBLAS DEFINITIONS                       |
+|                           CUDA INTERFACE                        |
 |                                                                 |
 -------------------------------------------------------------------
 */
-/*pub fn cblas_scopy_ffi(n: i32, x: &[f32], y: &mut [f32]) {
+extern "C" {
+    fn warm_up_gpu();
+
+    fn initial_policy_value(
+        pm: i32,
+        pn: i32,
+        pnz: i32,
+        pi: *const i32,
+        pj: *const i32,
+        px: *const f32,
+        pi_size: i32,
+        rm: i32,
+        rn: i32,
+        rnz: i32,
+        ri: *const i32,
+        rj: *const i32,
+        rx: *const f32,
+        ri_size: i32,
+        x: *mut f32,
+        y: *mut f32,
+        w: *const f32,
+        rmv: *mut f32,
+        unstable: *mut i32,
+        eps: f32
+    );
+
+    fn policy_value_stream(
+        p_init_m: i32,
+        p_init_n: i32,
+        p_init_nz: i32,
+        p_init_i: *const i32,
+        p_init_j: *const i32,
+        p_init_x: *const f32,
+        p_init_i_size: i32,
+        p_m: i32,
+        p_n: i32,
+        p_nz: i32,
+        p_i: *const i32,
+        p_j: *const i32,
+        p_x: *const f32,
+        p_i_size: i32,
+        r_init_m: i32,
+        r_init_n: i32,
+        r_init_nz: i32,
+        r_init_i: *const i32,
+        r_init_j: *const i32,
+        r_init_x: *const f32,
+        r_init_i_size: i32,
+        rm: i32,
+        rn: i32,
+        rnz: i32,
+        ri: *const i32,
+        rj: *const i32,
+        rx: *const f32,
+        ri_size: i32,
+        x_init: *mut f32,
+        y_init: *mut f32,
+        w_init: *const f32,
+        rmv_init: *mut f32,
+        y: *mut f32,
+        rmv: *mut f32,
+        w: *const f32,
+        unstable: *mut i32,
+        Pi: *mut i32,
+        enabled_actions: *const i32,
+        adj_sidx: *const i32,
+        stable: *mut f32,
+        eps: f32
+    );
+
+    fn policy_optimisation(
+        Pi: *const i32,
+        pm: i32,
+        pn: i32, 
+        pnz: i32,
+        pi: *const i32,
+        pj: *const i32,
+        px: *const f32,
+        rm: i32,
+        rn: i32,
+        rnz: i32,
+        ri: *const i32,
+        rj: *const i32,
+        rx: *const f32,
+        x: *mut f32,
+        y: *mut f32,
+        rmv: *mut f32,
+        w: *const f32,
+        eps: f32,
+        block_size: i32,
+        enabled_actions: *const i32,
+        adj_sidx: *const i32,
+        stable: *mut f32
+    );
+
+    fn multi_obj_solution(
+        pm: i32,
+        pn: i32,
+        pnz: i32,
+        pi: *const i32,
+        pj: *const i32,
+        px: *const f32,
+        pi_size: i32,
+        rm: i32,
+        rn: i32,
+        rnz: i32,
+        ri: *const i32,
+        rj: *const i32,
+        rx: *const f32,
+        ri_size: i32,
+        storage: *mut f32,
+        eps: f32,
+        nobjs: i32
+    );
+}
+
+pub fn cuda_warm_up_gpu() {
     unsafe {
-        cblas_scopy(n, x.as_ptr(), 1, y.as_mut_ptr(), 1);
+        warm_up_gpu();
     }
 }
 
-pub fn cblas_sscal_ffi(n: i32, alpha: f32, x: &mut [f32]) {
+pub fn cuda_initial_policy_value(
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    w: &[f32],
+    eps: f32,
+    x: &mut [f32],
+    y: &mut [f32],
+    rmv: &mut [f32],
+    unstable: &mut [i32]
+) {
+    let (pm, pn) = P.shape();
+    let pnz = P.nnz() as i32;
+    let (rm, rn) = R.shape();
+    let rnz = R.nnz() as i32;  
     unsafe {
-        cblas_sscal(n, alpha, x.as_mut_ptr(), 1);
+        initial_policy_value(
+            pm as i32, 
+            pn as i32, 
+            pnz, 
+            P.indptr().raw_storage().as_ptr(), 
+            P.indices().as_ptr(), 
+            P.data().as_ptr(), 
+            P.indptr().raw_storage().len() as i32,
+            rm as i32, 
+            rn as i32, 
+            rnz, 
+            R.indptr().raw_storage().as_ptr(), 
+            R.indices().as_ptr(), 
+            R.data().as_ptr(), 
+            R.indptr().raw_storage().len() as i32,
+            x.as_mut_ptr(), 
+            y.as_mut_ptr(), 
+            w.as_ptr(), 
+            rmv.as_mut_ptr(), 
+            unstable.as_mut_ptr(),
+            eps
+        )
     }
 }
 
-pub fn cblas_ddot_ffi(n: i32, x: &[f32], y: &mut [f32]) {
+pub fn cuda_initial_policy_value_pinned_graph(
+    Pinit: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    Rinit: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    w_init: &[f32],
+    w: &[f32],
+    eps: f32,
+    x_init: &mut [f32],
+    y_init: &mut [f32],
+    rmv_init: &mut [f32],
+    y: &mut [f32],
+    rmv: &mut [f32],
+    unstable: &mut [i32],
+    Pi: &mut [i32],
+    enabled_actions: &[i32],
+    adj_sidx: &[i32],
+    stable: &mut [f32],
+) {
+    // Matrix under initial scheduler
+    let (p_init_m, p_init_n) = Pinit.shape();
+    let p_init_nz = Pinit.nnz() as i32;
+    let (r_init_m, r_init_n) = Rinit.shape();
+    let r_init_nz = Rinit.nnz() as i32;  
+    // Complete
+    let (p_m, p_n) = P.shape();
+    let p_nz = P.nnz() as i32;
+    let (r_m, r_n) = R.shape();
+    let r_nz = R.nnz() as i32;
     unsafe {
-        cblas_sdot(n, x.as_ptr(), 1, y.as_mut_ptr(), 1);
+        policy_value_stream(
+            p_init_m as i32, 
+            p_init_n as i32, 
+            p_init_nz, 
+            Pinit.indptr().raw_storage().as_ptr(), 
+            Pinit.indices().as_ptr(), 
+            Pinit.data().as_ptr(), 
+            Pinit.indptr().raw_storage().len() as i32,
+            p_m as i32, 
+            p_n as i32, 
+            p_nz, 
+            P.indptr().raw_storage().as_ptr(), 
+            P.indices().as_ptr(), 
+            P.data().as_ptr(), 
+            P.indptr().raw_storage().len() as i32,
+            r_init_m as i32, 
+            r_init_n as i32, 
+            r_init_nz, 
+            Rinit.indptr().raw_storage().as_ptr(), 
+            Rinit.indices().as_ptr(), 
+            Rinit.data().as_ptr(), 
+            Rinit.indptr().raw_storage().len() as i32,
+            r_m as i32, 
+            r_n as i32, 
+            r_nz, 
+            R.indptr().raw_storage().as_ptr(), 
+            R.indices().as_ptr(), 
+            R.data().as_ptr(), 
+            R.indptr().raw_storage().len() as i32,
+            x_init.as_mut_ptr(), 
+            y_init.as_mut_ptr(), 
+            w_init.as_ptr(), 
+            rmv_init.as_mut_ptr(), 
+            y.as_mut_ptr(),
+            rmv.as_mut_ptr(),
+            w.as_ptr(),
+            unstable.as_mut_ptr(),
+            Pi.as_mut_ptr(),
+            enabled_actions.as_ptr(),
+            adj_sidx.as_ptr(),
+            stable.as_mut_ptr(),
+            eps
+        )
     }
-}*/
+
+    
+}
+
+pub fn cuda_policy_optimisation(
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    w: &[f32],
+    eps: f32,
+    Pi: &[i32],
+    x: &mut [f32],
+    y: &mut [f32],
+    rmv: &mut [f32],
+    enabled_actions: &[i32],
+    adjusted_sidx: &[i32],
+    initial_state: usize,
+    stable: &mut [f32]
+) -> f32 {
+    let (pm, pn) = P.shape();
+    let pnz = P.nnz() as i32;
+    let (rm, rn) = R.shape();
+    let rnz = R.nnz() as i32;
+    let block_size = x.len() as i32;
+    unsafe {
+        policy_optimisation(
+            Pi.as_ptr(), 
+            pm as i32, 
+            pn as i32, 
+            pnz, 
+            P.indptr().raw_storage().as_ptr(), 
+            P.indices().as_ptr(), 
+            P.data().as_ptr(), 
+            rm as i32, 
+            rn as i32, 
+            rnz, 
+            R.indptr().raw_storage().as_ptr(), 
+            R.indices().as_ptr(), 
+            R.data().as_ptr(), 
+            x.as_mut_ptr(), 
+            y.as_mut_ptr(), 
+            rmv.as_mut_ptr(), 
+            w.as_ptr(), 
+            eps, 
+            block_size, 
+            enabled_actions.as_ptr(),
+            adjusted_sidx.as_ptr(),
+            stable.as_mut_ptr()
+        );
+        x[initial_state]
+    }
+}
+
+pub fn cuda_multi_obj_solution(
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    storage: &mut [f32],
+    eps: f32,
+    nobjs: i32
+) {
+    let (p_m, p_n) = P.shape();
+    let p_nz = P.nnz() as i32;
+    let (r_m, r_n) = R.shape();
+    let r_nz = R.nnz() as i32;
+    unsafe {
+        multi_obj_solution(
+            p_m as i32,
+            p_n as i32,
+            p_nz,
+            P.indptr().raw_storage().as_ptr(),
+            P.indices().as_ptr(),
+            P.data().as_ptr(),
+            P.indptr().raw_storage().len() as i32,
+            r_m as i32,
+            r_n as i32,
+            r_nz,
+            R.indptr().raw_storage().as_ptr(),
+            R.indices().as_ptr(),
+            R.data().as_ptr(),
+            R.indptr().raw_storage().len() as i32,
+            storage.as_mut_ptr(),
+            eps, 
+            nobjs
+        )
+    }
+}
 /*
 -------------------------------------------------------------------
 |                     C_SPARSE MATRIX FUNCTIONS                   |
@@ -224,9 +568,3 @@ pub fn ffi_gaxpy(A: *const cmat, x: &[f32], y: &mut [f32]) {
         gaxpy(A, x.as_ptr(), y.as_mut_ptr());
     }
 }
-
-
-
-
-
-

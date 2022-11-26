@@ -4,18 +4,19 @@ use std::hash::Hash;
 use rand::Rng;
 
 use hashbrown::{HashMap, HashSet};
-use sprs::{CsMatBase, TriMat};
+use sprs::{CsMatBase, TriMatI};
 use crate::reverse_key_value_pairs;
 use crate::agent::env::Env;
 use crate::sparse::compress;
 use crate::task::dfa::DFA;
 
+#[derive(Clone)]
 pub struct MOProductMDP<S> {
     pub initial_state: (S, i32),
     pub states: Vec<(S, i32)>,
     pub actions: Vec<i32>,
-    pub P: CsMatBase<f32, usize, Vec<usize>, Vec<usize>, Vec<f32>>,
-    pub R: CsMatBase<f32, usize, Vec<usize>, Vec<usize>, Vec<f32>>,
+    pub P: CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
+    pub R: CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
     pub agent_id: i32, 
     pub task_id: i32,
     pub adjusted_state_act_pair: Vec<i32>, 
@@ -72,7 +73,7 @@ where S: Copy + Eq + Hash {
 pub fn product_mdp_bfs<S, E>(
     initial_state: (S, i32),
     mdp: &E,
-    task: DFA,
+    task: &DFA,
     agent_id: i32, 
     task_id: i32,
     n_agents: usize,
@@ -91,12 +92,12 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
 
     // construct a new triple matrix fo rthe transitions and the rewards
     // Transition triples
-    let mut prows: Vec<usize> = Vec::new();
-    let mut pcols: Vec<usize> = Vec::new();
+    let mut prows: Vec<i32> = Vec::new();
+    let mut pcols: Vec<i32> = Vec::new();
     let mut pvals: Vec<f32> = Vec::new();
     // Rewards triples
-    let mut rrows: Vec<usize> = Vec::new();
-    let mut rcols: Vec<usize> = Vec::new();
+    let mut rrows: Vec<i32> = Vec::new();
+    let mut rcols: Vec<i32> = Vec::new();
     let mut rvals: Vec<f32> = Vec::new();
 
     stack.push_back(initial_state);
@@ -113,7 +114,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
         let sidx = *pmdp.state_map.get(&(s, q)).unwrap();
         let row_idx = *adjusted_state_action.get(&(sidx as i32)).unwrap();
         for action in 0..actions.len() {
-            match mdp.step_(s, action as u8) {
+            match mdp.step_(s, action as u8, task_id) {
                 Ok(v) => {
                     if !v.is_empty() {
                         match enabled_actions.get_mut(&(sidx as i32)) {
@@ -127,10 +128,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
                                 || task.rejecting.contains(&q) {
                                 // do nothing
                             } else {
-                                rrows.push(row_idx as usize + action as usize); rcols.push(agent_id as usize); rvals.push(-1.);
+                                rrows.push(row_idx + action as i32); rcols.push(agent_id); rvals.push(-1.);
                             }
                             if task.accepting.contains(&q) {
-                                rrows.push(row_idx as usize + action as usize); rcols.push(task_id as usize + n_agents as usize); rvals.push(1.);
+                                rrows.push(row_idx + action as i32); rcols.push(task_id + n_agents as i32); rvals.push(1.);
                             }
                             state_rewards.insert(row_idx + action as i32);
                         }
@@ -154,7 +155,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
                                 .get(&(*sprime, qprime))
                                 .unwrap();
                             // add in the transition to the CxxMatrix
-                            prows.push(row_idx as usize + action as usize); pcols.push(sprime_idx); pvals.push(*p);
+                            prows.push(row_idx + action as i32); pcols.push(sprime_idx as i32); pvals.push(*p);
                             largest_row = row_idx + action as i32 + 1;
                             //println!("s: {:?}, @s: {}, q: {}, a: {}, sidx':{}. s': {:?}, q': {}, p: {}, w: {}", 
                             //   s, row_idx + action as i32, q, action, sprime_idx,sprime, qprime, p, w);
@@ -165,10 +166,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
             }
         }
     }
-    let pTriMatr = TriMat::from_triplets(
+    let pTriMatr = TriMatI::<f32, i32>::from_triplets(
         (largest_row as usize, pmdp.states.len()), prows, pcols, pvals
     );
-    let rTriMatr = TriMat::from_triplets(
+    let rTriMatr = TriMatI::<f32, i32>::from_triplets(
         (largest_row as usize, n_objs), rrows, rcols, rvals
     );    
     //println!("enabled actions \n{:?}", enabled_actions);

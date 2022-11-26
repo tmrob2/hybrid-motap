@@ -7,7 +7,7 @@ Tasks:
     - [x] (BLAS DOES NOT WORK - USE SPRS instead iwth mutable for each iteration) incorporate f32 CSR BLAS routines into the Value iteration routine
     - [x] stream the product models to the CPUs computing there r values
     - [x] collect r values in the MPSC and compute the allocation function
-- [ ] Build the simplest working example of the single block GPU multi-product model matrix
+- [x] Build the simplest working example of the single block GPU multi-product model matrix
     - [ ] construct the policy optimisation kernel for the GPU based on the CSR pointers
     - [ ] build the multi-objective value iteration implementation based on the compressed data structure
 

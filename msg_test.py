@@ -26,12 +26,12 @@ def message_sending_task(num_msgs):
         task.add_transition(num_msgs + 3, w, num_msgs + 3)
     return task
 
-#mission = hybrid.Mission()
-#
-#dfa = message_sending_task(1)
-#mission.add_task(dfa)
-#scpm = hybrid.SCPM(mission, 1, list(range(2)))
-#
+mission = hybrid.Mission()
+
+dfa = message_sending_task(1)
+mission.add_task(dfa)
+scpm = hybrid.SCPM(mission, 1, list(range(2)))
+
 #hybrid.test_build(scpm, msg_env)
 #
 #import numpy as np
@@ -60,14 +60,18 @@ def message_sending_task(num_msgs):
 #print("A.x \n", A @ x)
 #
 epsilon = 0.0001
-#w = [1.0, 0.]
-#init_x, init_pi = hybrid.test_initial_policy(scpm, msg_env, w, epsilon)
+w = [1.0, 0.]
+init_x, init_pi = hybrid.test_initial_policy(scpm, msg_env, w, epsilon)
+print("x:", init_x)
+print("pi:", init_pi)
+hybrid.test_cuda_initial_policy(scpm, msg_env, w, epsilon)
+print("CPU GPU Equivalence Test")
+w = [0.0, 1.0]
+hybrid.test_cudacpu_opt_pol(scpm, msg_env, w, epsilon)
 #
 NUM_TASKS = 4
 NUM_AGENTS = 2
 CPU_COUNT = 2
-#print("x:", init_x)
-#print("pi:", init_pi)
 
 w = [0.] * NUM_AGENTS + [1./NUM_TASKS] * NUM_TASKS
 mission = hybrid.Mission()
@@ -80,3 +84,4 @@ hybrid.test_threaded_initial_policy(scpm, msg_env, w, epsilon)
 hybrid.experiment_gpu_cpu_binary_thread(
     scpm, msg_env, w, epsilon, CPU_COUNT
 )
+

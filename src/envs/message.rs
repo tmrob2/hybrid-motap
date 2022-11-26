@@ -1,18 +1,20 @@
-use std::time::{Instant, Duration};
+use std::time::Instant;
 //use futures::executor::block_on;
 //use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use rayon::prelude::IntoParallelIterator;
-use sprs::visu::print_nnz_pattern;
+use rayon::prelude::*;
 use crate::algorithms::dp::{initial_policy, optimal_policy};
 use crate::sparse::argmax::argmaxM;
-use crate::{product, select_task_agent_pairs};
+use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
+    cuda_warm_up_gpu, cuda_initial_policy_value_pinned_graph, allocation_fn,
+    cuda_multi_obj_solution};
 use crate::agent::env::Env;
 use crate::model::momdp::{product_mdp_bfs, choose_random_policy};
 use crate::model::scpm::SCPM;
-use rayon::prelude::*;
-use std::thread;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crate::algorithms::hybrid::hybrid_stage1;
+use crate::model::momdp::MOProductMDP;
+use hashbrown::HashMap;
+use sprs::CsMatBase;
 
 type State = i32;
 
@@ -38,7 +40,7 @@ impl MessageSender {
 }
 
 impl Env<State> for MessageSender {
-    fn step_(&self, s: State, action: u8) -> Result<Vec<(State, f32, String)>, String> {
+    fn step_(&self, s: State, action: u8, _task_id: i32) -> Result<Vec<(State, f32, String)>, String> {
         let transition: Result<Vec<(State, f32, String)>, String> = match s {
             0 => {
                 // return the transition for state 0
@@ -109,7 +111,7 @@ where MessageSender: Env<State> {
     let _pmdp = product_mdp_bfs(
         (env.get_init_state(0),0), 
         env, 
-        model.tasks.get_task(0), 
+        &model.tasks.get_task(0), 
         0, 
         0, 
         model.num_agents, 
@@ -133,7 +135,7 @@ where MessageSender: Env<State> {
     let pmdp = product_mdp_bfs(
         (env.get_init_state(0), 0), 
         env, 
-        model.tasks.get_task(0), 
+        &model.tasks.get_task(0), 
         0, 
         0, 
         model.num_agents, 
@@ -196,7 +198,7 @@ where MessageSender: Env<State> {
         let pmdp = product_mdp_bfs(
             (env.get_init_state(a), 0), 
             env, 
-            model.tasks.get_task(t), 
+            &model.tasks.get_task(t), 
             a as i32, 
             t as i32, 
             model.num_agents, 
@@ -241,10 +243,132 @@ where MessageSender: Env<State> {
 
 }
 
-enum ControlMessage {
-    Quit,
-    Data((usize, usize)),
-    CPUData(Vec<(usize, usize)>)
+#[pyfunction]
+pub fn test_cuda_initial_policy(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>, 
+    epsilon: f32
+) -> ()
+where MessageSender: Env<State> {
+    // First step of the test is to construct an initial random policy
+    // which can be chosen directly from the action vector which contains
+    // the number of enabled actions in each of the states. 
+    let t1 = Instant::now();
+    // construct the product of all of the model, env pairs
+    //let mut _v: Vec<MOProductMDP<State>> = Vec::with_capacity(model.num_agents * model.tasks.size);
+    let mut w_init = vec![0.; model.num_agents + model.tasks.size];
+    for k in 0..model.num_agents {
+        w_init[k] = 1.;
+    }
+    // the question is can we optimise this?
+    let pmdp = product_mdp_bfs(
+        (env.get_init_state(0), 0), 
+        env, 
+        &model.tasks.get_task(0), 
+        0 as i32, 
+        0 as i32, 
+        model.num_agents, 
+        model.num_agents + model.tasks.size, 
+        &model.actions
+    );
+
+    let pi = choose_random_policy(&pmdp);
+
+    let rowblock = pmdp.states.len() as i32;
+    let pcolblock = rowblock as i32;
+    let rcolblock = (model.num_agents + model.tasks.size) as i32;
+    let initP = 
+        argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, 
+                &pmdp.adjusted_state_act_pair);
+    let initR = 
+        argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, 
+                &pmdp.adjusted_state_act_pair);
+
+    let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
+    let mut x: Vec<f32> = vec![0.; initP.shape().1];
+    let mut y: Vec<f32> = vec![0.; initP.shape().0];
+    let mut unstable: Vec<i32> = vec![0; initP.shape().0];
+    
+    cuda_initial_policy_value(initP.view(), initR.view(), &w, epsilon, 
+                              &mut r_v, &mut x, &mut y, &mut unstable);
+    println!("x: {:?}", x);
+
+    // The allocation function can be worked out at this point. 
+    println!("Elapsed time: {:?}", t1.elapsed().as_secs_f32());
+    //println!("Solution: {:?}", output);
+
+}
+
+#[pyfunction]
+pub fn test_cudacpu_opt_pol(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>, 
+    epsilon: f32
+) -> ()
+where MessageSender: Env<State> {
+    // First step of the test is to construct an initial random policy
+    // which can be chosen directly from the action vector which contains
+    // the number of enabled actions in each of the states. 
+
+    let mut w_init = vec![0.; model.num_agents + model.tasks.size];
+    for k in 0..model.num_agents {
+        w_init[k] = 1.;
+    }
+
+    let pmdp = product_mdp_bfs(
+        (env.get_init_state(0), 0), 
+        env, 
+        &model.tasks.get_task(0), 
+        0, 
+        0, 
+        model.num_agents, 
+        model.num_agents + model.tasks.size, 
+        &model.actions
+    );
+    // compute the initial random policy based on the enabled actions
+    let mut pi = choose_random_policy(&pmdp);
+
+    // construct the matrices under the initial random policy.
+    let rowblock = pmdp.states.len() as i32;
+    let pcolblock = rowblock as i32;
+    let rcolblock = (model.num_agents + model.tasks.size) as i32;
+    let initP = 
+        argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
+    let initR = 
+        argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
+
+    // using the random policy determine the value of the intial policy
+    let mut r_v: Vec<f32> = vec![0.; initR.shape().0 as usize];
+    let mut x: Vec<f32> = vec![0.; initP.shape().1 as usize];
+    let mut y: Vec<f32> = vec![0.; initP.shape().0 as usize];
+    
+    initial_policy(initP.view(), initR.view(), &w_init, epsilon, &mut r_v, &mut x, &mut y);
+
+    let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
+    let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
+    let mut xcpu = x.to_vec();
+    let t1 = Instant::now();
+    let rcpu = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, epsilon, 
+        &mut r_v, &mut xcpu, &mut y, &mut pi, &pmdp.enabled_actions, 
+        &pmdp.adjusted_state_act_pair, *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+    );
+    println!("CPU policy optimisation: {:?} (ns)", t1.elapsed().as_nanos());
+    
+    let mut xgpu = x.to_vec();
+    let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
+    let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
+    let t1 = Instant::now();
+    let mut stable: Vec<f32> = vec![0.; xgpu.len()];
+    let rgpu = cuda_policy_optimisation(pmdp.P.view(), pmdp.R.view(), &w, 
+        epsilon, &mut pi, &mut xgpu, &mut y, &mut r_v, &pmdp.enabled_actions, 
+        &pmdp.adjusted_state_act_pair, *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        &mut stable
+    );
+    println!("GPU policy optimisation: {:?} (ns)", t1.elapsed().as_nanos());
+
+    println!("CPU: {}, GPU: {}", rcpu, rgpu);
 }
 
 #[pyfunction]
@@ -256,162 +380,154 @@ pub fn experiment_gpu_cpu_binary_thread(
     CPU_COUNT: usize
 ) -> ()
 where MessageSender: Env<State> {
-    // TODO make this function generic
 
-    // First step of the test is to construct an initial random policy
-    // which can be chosen directly from the action vector which contains
-    // the number of enabled actions in each of the states. 
-    //let t1 = Instant::now();
-    // construct the product of all of the model, env pairs
-    //let mut _v: Vec<MOProductMDP<State>> = Vec::with_capacity(model.num_agents * model.tasks.size);
+    // first construct the models
+    let t1 = Instant::now();
+    let pairs = 
+        product(0..model.num_agents, 0..model.tasks.size);
+    let output: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
+        //env.set_task(*t);
+        let pmdp = product_mdp_bfs(
+            (env.get_init_state(a), 0), 
+            env,
+            &model.tasks.get_task(t), 
+            a as i32, 
+            t as i32, 
+            model.num_agents, 
+            model.num_agents + model.tasks.size,
+            &model.actions
+        );
+        pmdp
+    }).collect();
+    println!("Time to create {} models: {:?}", output.len(), t1.elapsed().as_secs_f32()); 
+    hybrid_stage1(
+        output, model.num_agents, model.tasks.size, w, epsilon, CPU_COUNT
+    );
+}
+
+#[pyfunction]
+pub fn msg_test_gpu_stream(
+    model: &SCPM,
+    env: &mut MessageSender,
+    w: Vec<f32>,
+    eps: f32
+) {
+    cuda_warm_up_gpu();
+    let t1 = Instant::now();
+    let pairs = 
+        product(0..model.num_agents, 0..model.tasks.size);
+    let models_ls: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
+        let pmdp = product_mdp_bfs(
+            (env.get_init_state(a), 0), 
+            env,
+            &model.tasks.get_task(t), 
+            a as i32, 
+            t as i32, 
+            model.num_agents, 
+            model.num_agents + model.tasks.size,
+            &model.actions
+        );
+        pmdp
+    }).collect(); 
+
     let mut w_init = vec![0.; model.num_agents + model.tasks.size];
-
     for k in 0..model.num_agents {
         w_init[k] = 1.;
     }
-    
-    let mut pairs = 
-        product(0..model.num_agents, 0..model.tasks.size);
-    // The idea of this test is to take estimates for products sizes
-    // if the product size sum is larger than the number of cuda cores then 
-    // send this partition to a thread for processing
-    
-    let (gpu_s1, gpu_r1) : (Sender<ControlMessage>, Receiver<ControlMessage>) = unbounded();
-    let (gpu_s2, gpu_r2) : (Sender<i32>, Receiver<i32>) = unbounded();
 
-    let (cpu_s1, cpu_r1) : (Sender<ControlMessage>, Receiver<ControlMessage>) = unbounded();
-    let (cpu_s2, cpu_r2) : (Sender<i32>, Receiver<i32>) = unbounded();
+    println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+        models_ls.len(), t1.elapsed().as_secs_f32(),
+        models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
+        models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+    );
+    let t2 = Instant::now();
+    let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
+    for pmdp in models_ls.iter() {
+        let mut pi = choose_random_policy(pmdp);
+        let rowblock = pmdp.states.len() as i32;
+        let pcolblock = rowblock as i32;
+        let rcolblock = (model.num_agents + model.tasks.size) as i32;
+        let initP = 
+            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
+        let initR = 
+            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
 
-    let e = env.clone();
-    let m = model.clone();
-    let gpu_thread = thread::spawn(move || {
-        loop {
-            match gpu_r1.try_recv() {
-                Ok(data) => { 
-                    match data {
-                        ControlMessage::Quit => { break; }
-                        // send the list items to oblivion
-                        ControlMessage::Data((a, t)) => { 
+        let mut r_v_init: Vec<f32> = vec![0.; initR.shape().0 as usize];
+        let mut x_init: Vec<f32> = vec![0.; initP.shape().1 as usize];
+        let mut y_init: Vec<f32> = vec![0.; initP.shape().0 as usize];
+        let mut unstable: Vec<i32> = vec![0; initP.shape().0 as usize];
+        let mut stable: Vec<f32> = vec![0.; x_init.len()];
+        let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
+        let mut rmv: Vec<f32> = vec![0.; pmdp.P.shape().0];
 
-                            // TODO we need to store the current sum of modified stat space size
+        cuda_initial_policy_value_pinned_graph(
+            initP.view(), 
+            initR.view(), 
+            pmdp.P.view(), 
+            pmdp.R.view(), 
+            &w_init,
+            &w, 
+            eps, 
+            &mut x_init, 
+            &mut y_init, 
+            &mut r_v_init, 
+            &mut y, 
+            &mut rmv, 
+            &mut unstable, 
+            &mut pi, 
+            &pmdp.enabled_actions, 
+            &pmdp.adjusted_state_act_pair,
+            &mut stable,
+        );
 
-                            println!("Received data: ({},{})", a, t);
-
-                            let pmdp = product_mdp_bfs(
-                                (e.get_init_state(a), 0), 
-                                &e, 
-                                m.tasks.get_task(t), 
-                                a as i32, 
-                                t as i32, 
-                                m.num_agents, 
-                                m.num_agents + m.tasks.size, 
-                                &m.actions
-                            );
-                            // send the data to CUDA to be processed and then returned to this thread
-                            // so that we can send the processed data back to the main thread.                            
-                            thread::sleep(Duration::from_secs(1));
-                            gpu_s2.send(99).unwrap();
-                        }
-                        _ => {}
-                    }
-                }
-                Err(_) => { }
+        match results.get_mut(&pmdp.task_id) {
+            Some(v) => { 
+                v[pmdp.agent_id as usize] = Some((
+                    pmdp.agent_id, 
+                    pi.to_owned(), 
+                    x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()]
+                ));
             }
-            //Ok(data) => { println!("Received some data: {:?}", data); }
-            //Err(e) => { println!("Received error: {:?}", e);}
-        }
-        let msg = "GPU controller thread closed successfully";
-        msg
-    });
-
-    // Create another thread for the CPUs to do work on
-    let ecpu = env.clone();
-    let mcpu = model.clone();
-    let cpu_thread = thread::spawn(move || {
-        // continuously loop and wait for data to be sent to the CPU for allocation
-        loop {
-            match cpu_r1.try_recv() {
-                Ok(data) => { 
-                    match data {
-                        ControlMessage::Quit => { break; }
-                        // send the list items to oblivion
-                        ControlMessage::CPUData(x) => { 
-
-                            // do the Rayon allocation of threads. 
-                            println!("CPUs Received data: {:?}", x);
-
-                            // TODO we need to store the current sum of modified stat space size
-                            let _output: Vec<(usize, usize, f32)> = x.into_par_iter().map(|(a, t)| {
-                                let pmdp = product_mdp_bfs(
-                                    (ecpu.get_init_state(a), 0), 
-                                    &ecpu, 
-                                    mcpu.tasks.get_task(t), 
-                                    a as i32, 
-                                    t as i32, 
-                                    mcpu.num_agents, 
-                                    mcpu.num_agents + mcpu.tasks.size, 
-                                    &mcpu.actions
-                                );
-                                (a, t, 1.0)
-                            }).collect();
-
-                            // send the data to CUDA to be processed and then returned to this thread
-                            // so that we can send the processed data back to the main thread.                            
-                            thread::sleep(Duration::from_secs(2));
-                            cpu_s2.send(100).unwrap();
-                        }
-                        _ => { }
-                    }
-                }
-                Err(_) => { }
+            None => {
+                results.insert(
+                    pmdp.task_id,
+                    (0..model.num_agents).map(|i| if i as i32 == pmdp.agent_id{
+                        // insert the current tuple
+                        Some((i as i32, 
+                        pi.to_owned(),
+                        x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()]))
+                    } else {
+                        None
+                    }).collect::<Vec<Option<(i32, Vec<i32>, f32)>>>()
+                );
             }
-        }
-        let msg = "CPU controller thread closed successfully";
-        msg
-    });
-
-    // fill the initial GPU buffer and the CPU buffer with models
-    gpu_s1.send(ControlMessage::Data(pairs.pop().unwrap())).unwrap();
-    cpu_s1.send(ControlMessage::CPUData(
-        pairs.drain(..std::cmp::min(CPU_COUNT, pairs.len())).collect())
-    ).unwrap();
-    while pairs.len() > 0 {
-        // First try and allocate the data to the GPU, if the GPU is free
-        // Otherwise try and allocate the data to the CPU if they are free
-        // If no device is free, then continue looping until one of the devices
-        // becomes free.
-        match gpu_r2.try_recv() {
-            Ok(data) => { 
-                println!("Received some work product from the GPU: {:?}", data);
-                let gpu_new_data = pairs.pop().unwrap();
-                println!("Sending some more work to the GPU: [{:?}]", gpu_new_data);
-                gpu_s1.send(ControlMessage::Data(gpu_new_data)).unwrap();
-                // TODO call GPU work here
-                // The GPU is a bit complicated, and we will need to send a copy of the
-                // model and the environment to the thread for constructing model. 
-            }
-            Err(_) => { 
-                // On receive error don't do anything, the GPU is not ready to take
-                // on new messages
-            }
-        }
-
-        match cpu_r2.try_recv() {
-            Ok(data) => {
-                println!("Received some work product from the CPUs: {:?}", data);
-                let cpu_new_data: Vec<(usize, usize)> = pairs.drain(..CPU_COUNT).collect();
-                println!("Sending some more work to the CPU: {:?}", cpu_new_data);
-                cpu_s1.send(ControlMessage::CPUData(cpu_new_data)).unwrap();
-            }
-            Err(_) => { }
-        }
+        }   
     }
+    println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
+    let allocation = allocation_fn(
+        &results, model.tasks.size, model.num_agents
+    );
 
-    gpu_s1.send(ControlMessage::Quit).unwrap();
-    cpu_s1.send(ControlMessage::Quit).unwrap();
-
-    println!("{:?}", cpu_thread.join().unwrap());
-    println!("{:?}", gpu_thread.join().unwrap());
-    
-
+    // Then for each allocation we need to make the argmax P, R matrices
+    let allocatedArgMax: Vec<(CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
+                              CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>)> 
+        = allocation.into_par_iter().map(|(t, a, pi)| {
+        let pmdp: &MOProductMDP<State> = models_ls.iter()
+            .filter(|m| m.agent_id == a && m.task_id == t)
+            .collect::<Vec<&MOProductMDP<State>>>()[0];
+            let rowblock = pmdp.states.len() as i32;
+            let pcolblock = rowblock as i32;
+            let rcolblock = (model.num_agents + model.tasks.size) as i32;
+            let argmaxP = 
+                argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
+            let argmaxR = 
+                argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
+            (argmaxP, argmaxR)
+    }).collect();
+    let nobjs = model.num_agents + model.tasks.size;
+    let (P, R) = allocatedArgMax[0].to_owned();
+    let mut storage = vec![0.; P.shape().0 * nobjs];
+    cuda_multi_obj_solution(P.view(), R.view(), &mut storage, eps, nobjs as i32);
+    println!("Total runtime {}", t2.elapsed().as_secs_f32());
+    println!("Test result: {:?}", storage);
 }

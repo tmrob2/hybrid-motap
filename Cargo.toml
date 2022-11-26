@@ -6,11 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "hybrid"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
-pyo3 = { version = "0.17.1", features = ["extension-module"] }
-hashbrown = "0.13.1"
+pyo3 = { version = "0.17.1", features = ["extension-module", "hashbrown"] }
+hashbrown = "0.12"
 #serde = {version = "1.0.144", features = ["derive"] }
 #serde_json = "1.0.85"
 #blas-src = { version = "0.8", features = ["blis"] }
@@ -23,6 +23,7 @@ crossbeam-channel = "0.5.6"
 rayon = "1.6.0"
 ndarray = "0.15.6"
 sprs = "0.11.0"
+array-macro = "2.1.5"
 
 [build-dependencies]
 cc = "1.0"

@@ -12,16 +12,28 @@ An epsilon threshold for ending value iteration
 */
 
 use sprs::{CsMatBase, prod::mul_acc_mat_vec_csr};
-use ndarray::prelude::*;
 
-const MAX_ITERATIONS: usize = 10;
+const MAX_ITERATIONS: usize = 1000;
+const MAX_UNSTABLE: i32 = 5;
 
-fn abs_max_diff(x: &[f32], y: &[f32]) -> f32 {
+fn abs_max_diff(
+    x: &[f32], y: &mut [f32], 
+    epsold_: &mut [f32], unstable: &mut [i32]) -> f32 {
     let mut eps = 0.;
     for k in 0..y.len() {
+        if (y[k] - x[k]).abs() < epsold_[k] {
+            unstable[k] = 0;
+        } else {
+            unstable[k] += 1;    
+        }
+        epsold_[k] = (y[k] - x[k]).abs();
         if (y[k] - x[k]).abs() > eps {
+            //println!("y: {}, x: {}, k: {}", y[k], x[k], k);
             eps = (y[k] - x[k]).abs();
         }
+        if unstable[k] > MAX_UNSTABLE && y[k] < 0. {
+            y[k] = -f32::INFINITY;
+        } 
     }
     eps
 }
@@ -57,8 +69,8 @@ fn action_comparison(
 }
 
 pub fn initial_policy(
-    P: CsMatBase<f32, usize, &[usize], &[usize], &[f32]>, // This is a view of the transition matrix CSR fmt
-    R: CsMatBase<f32, usize, &[usize], &[usize], &[f32]>, // This is a view of the rewards matrix CSR fmt
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the transition matrix CSR fmt
+    R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the rewards matrix CSR fmt
     w: &[f32], 
     epsilon: f32, 
     r_v: &mut [f32],
@@ -69,10 +81,12 @@ pub fn initial_policy(
     // First compute the matrix vector dot product R.w
     //println!("|w|: {}, |x|: {}, |y|: {}, |r|: {}", w.len(), x.len(), y.len(), r_v.len());
     //println!("{:?}", R.to_dense());
+    let mut epsold_ = vec![0.; x.len()];
+    let mut unstable = vec![0; x.len()];
     mul_acc_mat_vec_csr(R, w, &mut *r_v);
     let mut k: usize = 0;
 
-    while k < MAX_ITERATIONS && eps > epsilon {
+    while k < MAX_ITERATIONS && eps > epsilon && eps != f32::INFINITY {
 
         // compute the sparse matrix vector dot product of P.x and add it to r_v to
         // i.e. y = r + P.x
@@ -81,22 +95,21 @@ pub fn initial_policy(
         }
         //println!("y before  P.v: \n{:?}", y);
         mul_acc_mat_vec_csr(P, &*x, &mut *y);
-        //println!("y after P.v:\n{:?}", y);        
-
+        
         // check the difference between x and y
-        eps = abs_max_diff(&x, &y);
-
+        eps = abs_max_diff(&x, y, &mut epsold_, &mut unstable);
+        
         for (i, x_) in x.iter_mut().enumerate() {
             *x_ = y[i];
         }
+        //println!("eps: {}, x:\n{:.2?}", eps, x);        
         k += 1;
     }
-
 }
 
 pub fn optimal_policy(
-    P: CsMatBase<f32, usize, &[usize], &[usize], &[f32]>, // This is a view of the transition matrix CSR fmt
-    R: CsMatBase<f32, usize, &[usize], &[usize], &[f32]>, // This is a view of the rewards matrix CSR fmt
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the transition matrix CSR fmt
+    R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the rewards matrix CSR fmt
     w: &[f32], 
     epsilon: f32, 
     r_v: &mut [f32],
