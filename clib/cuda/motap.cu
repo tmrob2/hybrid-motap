@@ -10,7 +10,7 @@
 #include <thrust/execution_policy.h>
 
 int MAX_ITERATIONS = 1000;
-const int MAX_UNSTABLE = 5;
+const int MAX_UNSTABLE = 50;
 /*
 #######################################################################
 #                           KERNELS                                   #
@@ -58,7 +58,7 @@ __global__ void abs_diff(float *a, float *b, float *c, int *unstable, int m) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x; // HANDLE THE DATA AT THIS INDEX
     if (tid < m) {
         // compute the absolute diff between two elems
-        if (fabsf(b[tid] - a[tid]) < c[tid]) {
+        if (fabsf(b[tid] - a[tid]) < c[tid] || a[tid] == 0.) {
             unstable[tid] = 0;
         } else {
             unstable[tid]++;
@@ -70,18 +70,34 @@ __global__ void abs_diff(float *a, float *b, float *c, int *unstable, int m) {
     } 
 }
 
+__global__ void mobj_abs_diff(float *x, float *y, float *eps_capture, int *unstable, 
+    int obj, int N) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < N) {
+        if (fabsf(x[tid] - y[tid]) < eps_capture[obj * N + tid] || y[tid] == 0.) {
+            unstable[obj * N + tid] = 0;
+        } else {
+            unstable[obj * N + tid]++;
+        }
+        eps_capture[obj * N + tid] = fabs(x[tid] - y[tid]);
+        if (unstable[obj * N + tid] > MAX_UNSTABLE && y[tid] < 0) {
+            y[tid] = -INFINITY;
+        }
+    }
+}
+
 __global__ void change_elem(float *arr, int idx, int val) {
     arr[idx] = val;
 }
 
-__global__ void copy_elems(float *arr, int begin_idx, float *cp_vals, int N) {
+__global__ void copy_elems(float *dest, int begin_idx, float *src, int begin_cp, int N) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid < N) {
-        arr[tid + begin_idx] = cp_vals[tid];
+        dest[tid + begin_idx] = src[tid + begin_cp];
     }
 }
 
-void copy_elems_launcher(float *arr, int begin_idx, float *cp_vals, int N) {
+void copy_elems_launcher(float *dest, int begin_idx, float *src, int begin_cp, int N) {
     int blockSize;    // The launch configurator returned block size
     int minGridSize;  // The maximum grid size needed to achieve max
                       // maximum occupancy
@@ -92,7 +108,7 @@ void copy_elems_launcher(float *arr, int begin_idx, float *cp_vals, int N) {
     // Round up according to array size
     gridSize = (N + blockSize - 1) / blockSize;
 
-    copy_elems<<<gridSize, blockSize>>>(arr, begin_idx, cp_vals, N);
+    copy_elems<<<gridSize, blockSize>>>(dest, begin_idx, src, begin_cp, N);
 }
 
 void max_value_launcher(float *y, int*enabled_actions, int *adj_sidx, float *xnew,
@@ -111,6 +127,20 @@ void max_value_launcher(float *y, int*enabled_actions, int *adj_sidx, float *xne
     max_value<<<gridSize, blockSize>>>(y, enabled_actions, adj_sidx, xnew, xold, pi,
         stable, epsilon, N
     );
+}
+
+void mobj_abs_diff_launcher(float *x, float*y, float *eps_capture, int *unstable, int obj, int N) {
+    int blockSize;    // The launch configurator returned block size
+    int minGridSize;  // The maximum grid size needed to achieve max
+                      // maximum occupancy
+    int gridSize;     // The grid size needed, based on the input size
+
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, max_value, 0, 0);
+
+    // Round up according to array size
+    gridSize = (N + blockSize - 1) / blockSize;
+
+    mobj_abs_diff<<<gridSize, blockSize>>>(x, y, eps_capture, unstable, obj, N);
 }
 
 void abs_diff_launcher(float *a, float *b, float* c, int *unstable, int m) {
@@ -1152,7 +1182,6 @@ int policy_value_stream(
         CHECK_CUBLAS(cublasSaxpy(blashandle, p_init_m, &alpha, dRMvInit, 1, dYinit, 1));
         
         // ---------------------COMPUTE EPSILON---------------------------
-
         // what is the difference between dY and dX
 
         // EPSILON COMPUTATION
@@ -1224,6 +1253,7 @@ int policy_value_stream(
 
     // COPY THE SOLUTION BACK TO THE HOST
     CHECK_CUDA(cudaMemcpy(x_init, dXinit, p_n * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(Pi, PI, p_n * sizeof(float), cudaMemcpyDeviceToHost));
     
     // Load the the other data on the 
     // 
@@ -1326,9 +1356,12 @@ int multi_obj_solution(
     int *rj,
     float *rx,
     int ri_size,
-    int *storage,
     float eps,
-    int nobjs
+    int nobjs,
+    float *x,
+    float *w,
+    float *z,
+    int *unstable
 ) {
     // Setup the framework infrastructure
     cusparseHandle_t handle;
@@ -1340,12 +1373,6 @@ int multi_obj_solution(
     cusparseSpMatDescr_t descrP = NULL;
     cusparseSpMatDescr_t descrR = NULL;
 
-    // INITIALISE ARRAYS
-    float x[pn] = { 0. };
-    float y[pm] = { 0. };
-    float rmv[pm] = { 0. };
-    float w[rn] = { 0. };
-    int unstable[pm * nobjs] = { 0 };
     //float rStorage[rm * nobjs] = { 0. };
 
     // allocated the device memory for the COO matrix
@@ -1423,7 +1450,7 @@ int multi_obj_solution(
 
     // assign the cuda memory for the vectors
     cusparseDnVecDescr_t vecX, vecY;
-    float *dX, *dY, *dZ, *dStaticY, *dStorage;
+    float *dX, *dY, *dZ, *dStorage;
     int *dUnstable;
     void* dBuffer = NULL;
     size_t bufferSize = 0;
@@ -1431,15 +1458,16 @@ int multi_obj_solution(
     // Allocate the device memory
     CHECK_CUDA( cudaMalloc((void**)&dX, pm * sizeof(float)) );
     CHECK_CUDA( cudaMalloc((void**)&dY, pm * sizeof(float)) );
-    CHECK_CUDA( cudaMalloc((void**)&dZ, pm * sizeof(float)) );
-    CHECK_CUDA( cudaMalloc((void**)&dStaticY, pm * sizeof(float)) );
-    CHECK_CUDA( cudaMalloc((void**)&dUnstable, pm * nobjs * sizeof(int)) );
+    CHECK_CUDA( cudaMalloc((void**)&dZ, pm * nobjs * sizeof(float)) ); // use this to store the epsilon values
     CHECK_CUDA( cudaMalloc((void**)&dStorage, pm * nobjs * sizeof(float)) );
+    CHECK_CUDA( cudaMalloc((void**)&dUnstable, pm * nobjs * sizeof(int)) );
     
     // copy the vector from host memory to device memory
-    cudaMemcpy(dX, x, pn * sizeof(float), cudaMemcpyHostToDevice); // TODO the size of X, and Y will need to be much larger
-    cudaMemcpy(dStaticY, y, pm * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dUnstable, unstable, pm * nobjs * sizeof(int), cudaMemcpyHostToDevice);
+    CHECK_CUDA(cudaMemcpy(dX, x, pn * sizeof(float), cudaMemcpyHostToDevice) );
+    CHECK_CUDA(cudaMemcpy(dY, dX, pm * sizeof(float), cudaMemcpyDeviceToDevice) );
+    CHECK_CUDA(cudaMemcpy(dZ, z, pm * nobjs * sizeof(float), cudaMemcpyHostToDevice) );
+    CHECK_CUDA(cudaMemcpy(dStorage, dZ, nobjs * pm * sizeof(float), cudaMemcpyDeviceToDevice));
+    CHECK_CUDA(cudaMemcpy(dUnstable, unstable, nobjs * pm * sizeof(float), cudaMemcpyHostToDevice));
 
     // create a dense vector on device memory
     cusparseCreateDnVec(&vecX, pn, dX, CUDA_R_32F);
@@ -1470,9 +1498,8 @@ int multi_obj_solution(
 
     // copy the vector from host memory to device memory
     CHECK_CUDA( cudaMemcpy(dRw, w, rn * sizeof(float), cudaMemcpyHostToDevice) );
-    CHECK_CUDA( cudaMemcpy(dRMv, rmv, rm * sizeof(float), cudaMemcpyHostToDevice) );
-    CHECK_CUDA( cudaMemcpy(dRMv, rmv, rm * sizeof(float), cudaMemcpyHostToDevice) );
-    CHECK_CUDA( cudaMemset(dRStorage, 0., rm * nobjs * sizeof(float)) );
+    CHECK_CUDA( cudaMemcpy(dRMv, dX, rm * sizeof(float), cudaMemcpyDeviceToDevice) );
+    CHECK_CUDA( cudaMemcpy(dRStorage, dZ, rm * nobjs * sizeof(float), cudaMemcpyDeviceToDevice) );
     // create a dense vector on device memory
     CHECK_CUSPARSE( cusparseCreateDnVec(&vecW, rn, dRw, CUDA_R_32F) );
     CHECK_CUSPARSE( cusparseCreateDnVec(&vecRMv, rm, dRMv, CUDA_R_32F) );
@@ -1483,70 +1510,77 @@ int multi_obj_solution(
         CUSPARSE_MV_ALG_DEFAULT, &bufferSizeR) );
     CHECK_CUDA( cudaMalloc(&dBufferR, bufferSizeR) );
 
-    cudaGraph_t     graph;
-    cudaStream_t    stream;
-    cudaGraphExec_t graph_exec;
-    bool            graph_created = false;
-    CHECK_CUDA( cudaStreamCreate(&stream) )
-    CHECK_CUSPARSE ( cusparseSetStream(handle, stream) )
-
-    if (!graph_created) {
-        CHECK_CUDA( cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal) )
-
-    
-        for (int k = 0; k < nobjs; k++) {
-            // reset the W vector to all zeros
-            CHECK_CUDA( cudaMemset(dRw, 0., nobjs * sizeof(float)) )
-            // Change the value of the w array according to the objective we are
-            // considering
-            change_elem<<<1, 1>>>(dRw, k, 1.0);
-            CHECK_CUSPARSE(cusparseSpMV(
-                handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
-                &alphaR, descrR, vecW, &betaR, vecRMv, CUDA_R_32F, 
-                CUSPARSE_MV_ALG_DEFAULT, dBufferR));
-            // copy the relevant values to the Rstorage array in the range of |S|
-            copy_elems_launcher(dRStorage, k * rm, dRMv, rm);
-        }
-
-        CHECK_CUDA( cudaStreamEndCapture(stream, &graph) )
-        //CHECK_CUDA( cudaStreamSynchronize() )
-        //CHECK_CUDA( cudaGetLastError() )
-        CHECK_CUDA( cudaGraphInstantiate(&graph_exec, graph, NULL, NULL, 0) )
-        graph_created = true;
+    for (int k = 0; k < nobjs; k++) {
+        // reset the W vector to all zeros
+        CHECK_CUDA( cudaMemset(dRw, 0., nobjs * sizeof(float)) )
+        CHECK_CUDA( cudaMemset(dRMv, 0., rm * sizeof(float)) )
+        // Change the value of the w array according to the objective we are
+        // considering
+        change_elem<<<1, 1>>>(dRw, k, 1.0);
+        CHECK_CUSPARSE(cusparseSpMV(
+            handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
+            &alphaR, descrR, vecW, &betaR, vecRMv, CUDA_R_32F, 
+            CUSPARSE_MV_ALG_DEFAULT, dBufferR));
+        // copy the relevant values to the Rstorage array in the range of |S|
+        copy_elems_launcher(dRStorage, k * rm, dRMv, 0,  rm);
     }
 
-    CHECK_CUDA( cudaGraphLaunch(graph_exec, stream) )
-    CHECK_CUDA( cudaStreamSynchronize(stream) )
+    float maxeps;
+    maxeps = 0.0f;
 
-    CHECK_CUDA(cudaMemcpy(storage, dRStorage, pm * nobjs * sizeof(float), cudaMemcpyDeviceToHost));
+    for (int i = 0; i < MAX_ITERATIONS; i++) {
 
-    /*for (int i = 0; i < MAX_ITERATIONS; i++) {
-        if (!graph_created) {
-            CHECK_CUDA( cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal) )
-
-            for (int k = 0; k < nobjs; k++) {
-                // do some kernel stuff
-                CHECK_CUSPARSE(cusparseSpMV(
-                    handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
-                    &alpha, descrP, vecX, &beta, vecY, CUDA_R_32F, 
-                    CUSPARSE_MV_ALG_DEFAULT, dBuffer));
+        for (int k = 0; k < nobjs; k++) {
+            copy_elems_launcher(dY, 0, dRStorage, k * rm, rm);
+            copy_elems_launcher(dX, 0, dStorage, k * pm, pm);
+            // The next line compute R(k) + P.x
+            /*
+            CHECK_CUDA(cudaMemcpy(x, dX, pm * sizeof(float), cudaMemcpyDeviceToHost));
+            printf("k=%i\n", k);
+            for (int i=0; i<pm; i++) {
+                printf("%f, ", x[i]);
             }
-            CHECK_CUDA( cudaStreamEndCapture(stream, &graph) )
-            //CHECK_CUDA( cudaStreamSynchronize() )
-            //CHECK_CUDA( cudaGetLastError() )
-            CHECK_CUDA( cudaGraphInstantiate(&graph_exec, graph, NULL, NULL, 0) )
-            graph_created = true;
+            printf("\n");
+            */
+            CHECK_CUSPARSE(cusparseSpMV(
+                handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
+                &alpha, descrP, vecX, &betaR, vecY, CUDA_R_32F, 
+                CUSPARSE_MV_ALG_DEFAULT, dBuffer));
+
+            // update the epsilons for the computed values
+            CHECK_CUDA(cudaMemcpy(x, dY, pm * sizeof(float), cudaMemcpyDeviceToHost));
+            /*
+            printf("Y; k=%i\n", k);
+            for (int i=0; i<pm; i++) {
+                printf("%f, ", x[i]);
+            }
+            printf("\n");
+            */
+            mobj_abs_diff_launcher(dX, dY, dZ, dUnstable, k, pm);
+
+            // copy x <- y
+            copy_elems_launcher(dStorage, k * pm, dY, 0, pm);
         }
-        CHECK_CUDA(  cudaGraphLaunch(graph_exec, stream) );
-        cudaStreamSynchronize(stream);
-    }*/
+        
+        //CHECK_CUDA(cudaMemcpy(unstable, dUnstable, pm * nobjs * sizeof(int), cudaMemcpyDeviceToHost));
+        //printf("\n");
+        //for (int i=0; i<pm *nobjs; i++) {
+        //    printf("%i, ", unstable[i]);
+        //}
+        //printf("\n");
+        
+        // lets try and see if we can access our Z values
+        thrust::device_ptr<float> dev_ptr(dZ);
+        maxeps = *thrust::max_element(thrust::device, dev_ptr, dev_ptr + pm * nobjs);
+        //std::cout << "EPS_TEST " << "THRUST "<< maxeps << std::endl;
+        if (maxeps < eps || isnan(maxeps) || isinf(maxeps)) {
+            //printf("\nFinished M_obj VPI in %i steps\n", i);
+            break;
+        }
+    }
 
-    // destroy graph
-    CHECK_CUDA( cudaDeviceSynchronize() )
-    CHECK_CUDA( cudaGraphExecDestroy(graph_exec) )
-    CHECK_CUDA( cudaGraphDestroy(graph) )
-    CHECK_CUDA( cudaStreamDestroy(stream) )
-
+    CHECK_CUDA(cudaMemcpy(z, dStorage, pm * nobjs * sizeof(float), 
+                          cudaMemcpyDeviceToHost));
     CHECK_CUSPARSE( cusparseDestroySpMat(descrP) )
     CHECK_CUSPARSE( cusparseDestroySpMat(descrR) )
     CHECK_CUSPARSE( cusparseDestroyDnVec(vecX) )
@@ -1566,9 +1600,10 @@ int multi_obj_solution(
     //cudaFree(d_eps);
     CHECK_CUDA( cudaFree(dX) )
     CHECK_CUDA( cudaFree(dY) )
-    CHECK_CUDA( cudaFree(dStaticY) )
+    CHECK_CUDA( cudaFree(dRStorage) )
     CHECK_CUDA( cudaFree(dUnstable) )
     CHECK_CUDA( cudaFree(dZ) )
+    CHECK_CUDA( cudaFree(dStorage) )
     CHECK_CUDA( cudaFree(dRw) )
     CHECK_CUDA( cudaFree(dRMv) )
     CHECK_CUDA( cudaFree(dBuffer) )

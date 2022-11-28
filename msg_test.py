@@ -69,9 +69,10 @@ print("CPU GPU Equivalence Test")
 w = [0.0, 1.0]
 hybrid.test_cudacpu_opt_pol(scpm, msg_env, w, epsilon)
 #
-NUM_TASKS = 4
+NUM_TASKS = 2
 NUM_AGENTS = 2
 CPU_COUNT = 2
+debug = 2
 
 w = [0.] * NUM_AGENTS + [1./NUM_TASKS] * NUM_TASKS
 mission = hybrid.Mission()
@@ -79,9 +80,13 @@ for msg in range(NUM_TASKS):
     dfa = message_sending_task(msg + 1)
     mission.add_task(dfa)
 scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
-hybrid.test_threaded_initial_policy(scpm, msg_env, w, epsilon)
+#hybrid.test_threaded_initial_policy(scpm, msg_env, w, epsilon)
 
 hybrid.experiment_gpu_cpu_binary_thread(
-    scpm, msg_env, w, epsilon, CPU_COUNT
+    scpm, msg_env, w, epsilon, CPU_COUNT, debug
 )
+
+hybrid.msg_test_gpu_stream(scpm, msg_env, w, epsilon, debug)
+
+hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
 

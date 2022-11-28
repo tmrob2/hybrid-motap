@@ -2,9 +2,9 @@ use pyo3::prelude::*;
 use hashbrown::{HashSet, HashMap};
 use array_macro::array;
 use pyo3::exceptions::PyValueError;
-use sprs::CsMatBase;
 use crate::agent::env::Env;
-use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, cuda_warm_up_gpu, cuda_initial_policy_value_pinned_graph, warm_up_gpu, allocation_fn, cuda_multi_obj_solution};
+use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
+    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level};
 use crate::sparse::argmax::argmaxM;
 use crate::model::momdp::{product_mdp_bfs, choose_random_policy};
 use crate::model::scpm::SCPM;
@@ -373,8 +373,8 @@ impl Env<State> for Warehouse {
 pub fn warehouse_build_test(
     model: &SCPM,
     env: &mut Warehouse,
-    w: Vec<f32>,
-    eps: f32,
+    _w: Vec<f32>,
+    _eps: f32,
     //mut outputs: MDPOutputs
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
@@ -472,8 +472,8 @@ println!(
 pub fn test_warehouse_model_size(
     model: &SCPM,
     env: &mut Warehouse,
-    w: Vec<f32>,
-    eps: f32,
+    _w: Vec<f32>,
+    _eps: f32,
     //mut outputs: MDPOutputs
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
@@ -586,12 +586,23 @@ pub fn test_warehouse_CPU_only(
     env: &mut Warehouse,
     w: Vec<f32>,
     eps: f32,
+    debug: i32
     //mut outputs: MDPOutputs
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
+println!(
+"--------------------------\n
+        CPU TEST        \n
+--------------------------"
+);
     let t1 = Instant::now();
-    println!("Constructing MDP of agent environment");
-    //model.construct_products(&mut mdp);
+    let dbug = debug_level(debug);
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Constructing MDP of agent environment");
+        }
+    }
     let pairs = 
         product(0..model.num_agents, 0..model.tasks.size);
     let models_ls: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
@@ -607,53 +618,31 @@ where Warehouse: Env<State> {
         );
         pmdp
     }).collect(); 
-    println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
-        models_ls.len(), t1.elapsed().as_secs_f32(),
-        models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
-        models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
-    );
-
+    match dbug{
+        Debug::None => { }
+        _ => { 
+            println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+                models_ls.len(), t1.elapsed().as_secs_f32(),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+            );
+        }
+    }
     let t2 = Instant::now();
-    // Input all of the models into the rayon framework
-    let _output: Vec<f32> = models_ls.into_par_iter().map(|pmdp| {
-
-        let mut pi = choose_random_policy(&pmdp);
-
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (model.num_agents + model.tasks.size) as i32;
-        let initP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, 
-                    &pmdp.adjusted_state_act_pair);
-        let initR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, 
-                    &pmdp.adjusted_state_act_pair);
-
-        let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
-        let mut x: Vec<f32> = vec![0.; initP.shape().1];
-        let mut y: Vec<f32> = vec![0.; initP.shape().0];
-        
-        initial_policy(initP.view(), initR.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y);
-
-        // taking the initial policy and the value vector for the initial policy
-        // what is the optimal policy
-        let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
-        let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
-        let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y, &mut pi, 
-                    &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
-                    *pmdp.state_map.get(&pmdp.initial_state).unwrap()
-                    );
-        r
-    }).collect();
-    println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-    println!("Total runtime {}", t2.elapsed().as_secs_f32());
-
+    let _result = cpu_only_solver(
+        models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
+    );
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Stage 1 + Stage 2 runtime: {}", t2.elapsed().as_secs_f32());
+            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+        }
+    }
 }
 
 #[pyfunction]
-pub fn test_warehouse_GPU_only(
+pub fn test_warehouse_GPU_no_stream(
     model: &SCPM,
     env: &mut Warehouse,
     w: Vec<f32>,
@@ -708,7 +697,7 @@ where Warehouse: Env<State> {
         let mut y: Vec<f32> = vec![0.; initP.shape().0 as usize];
         let mut unstable: Vec<i32> = vec![0; initP.shape().0 as usize];
 
-        let t2 = Instant::now();
+        let _t2 = Instant::now();
         
         cuda_initial_policy_value(initP.view(), initR.view(), &w_init, eps, 
                                 &mut r_v, &mut x, &mut y, &mut unstable);
@@ -732,13 +721,20 @@ where Warehouse: Env<State> {
 }
 
 #[pyfunction]
-pub fn test_gpu_stream(
+pub fn test_warehouse_gpu_only(
     model: &SCPM,
-    env: &mut Warehouse,
+    env: &Warehouse,
     w: Vec<f32>,
     eps: f32,
+    debug: i32
 ) {
+println!(
+"--------------------------\n
+        GPU TEST        \n
+--------------------------"
+);
     cuda_warm_up_gpu();
+    let dbug = debug_level(debug);
     let t1 = Instant::now();
     let pairs = 
         product(0..model.num_agents, 0..model.tasks.size);
@@ -755,104 +751,81 @@ pub fn test_gpu_stream(
         );
         pmdp
     }).collect(); 
-
-    let mut w_init = vec![0.; model.num_agents + model.tasks.size];
-    for k in 0..model.num_agents {
-        w_init[k] = 1.;
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+                models_ls.len(), t1.elapsed().as_secs_f32(),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+            );
+        }
     }
-
-    println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
-        models_ls.len(), t1.elapsed().as_secs_f32(),
-        models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
-        models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
-    );
     let t2 = Instant::now();
-    let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
-    for pmdp in models_ls.iter() {
-        let mut pi = choose_random_policy(pmdp);
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (model.num_agents + model.tasks.size) as i32;
-        let initP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
-        let initR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
-
-        let mut r_v_init: Vec<f32> = vec![0.; initR.shape().0 as usize];
-        let mut x_init: Vec<f32> = vec![0.; initP.shape().1 as usize];
-        let mut y_init: Vec<f32> = vec![0.; initP.shape().0 as usize];
-        let mut unstable: Vec<i32> = vec![0; initP.shape().0 as usize];
-        let mut stable: Vec<f32> = vec![0.; x_init.len()];
-        let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
-        let mut rmv: Vec<f32> = vec![0.; pmdp.P.shape().0];
-
-        cuda_initial_policy_value_pinned_graph(
-            initP.view(), 
-            initR.view(), 
-            pmdp.P.view(), 
-            pmdp.R.view(), 
-            &w_init,
-            &w, 
-            eps, 
-            &mut x_init, 
-            &mut y_init, 
-            &mut r_v_init, 
-            &mut y, 
-            &mut rmv, 
-            &mut unstable, 
-            &mut pi, 
-            &pmdp.enabled_actions, 
-            &pmdp.adjusted_state_act_pair,
-            &mut stable,
-        );
-
-        match results.get_mut(&pmdp.task_id) {
-            Some(v) => { 
-                v[pmdp.agent_id as usize] = Some((
-                    pmdp.agent_id, 
-                    pi.to_owned(), 
-                    x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()]
-                ));
-            }
-            None => {
-                results.insert(
-                    pmdp.task_id,
-                    (0..model.num_agents).map(|i| if i as i32 == pmdp.agent_id{
-                        // insert the current tuple
-                        Some((i as i32, 
-                        pi.to_owned(),
-                        x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()]))
-                    } else {
-                        None
-                    }).collect::<Vec<Option<(i32, Vec<i32>, f32)>>>()
-                );
-            }
-        }   
-    }
-    println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-    let allocation = allocation_fn(
-        &results, model.tasks.size, model.num_agents
+    let _result = gpu_only_solver(
+        models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
     );
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Stage 1 + Stage 2 runtime: {}", t2.elapsed().as_secs_f32());
+            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+        }
+    }
+}
 
-    // Then for each allocation we need to make the argmax P, R matrices
-    let allocatedArgMax: Vec<(CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
-                              CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>)> 
-        = allocation.into_par_iter().map(|(t, a, pi)| {
-        let pmdp: &MOProductMDP<State> = models_ls.iter()
-            .filter(|m| m.agent_id == a && m.task_id == t)
-            .collect::<Vec<&MOProductMDP<State>>>()[0];
-            let rowblock = pmdp.states.len() as i32;
-            let pcolblock = rowblock as i32;
-            let rcolblock = (model.num_agents + model.tasks.size) as i32;
-            let argmaxP = 
-                argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
-            let argmaxR = 
-                argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
-            (argmaxP, argmaxR)
-    }).collect();
-    let nobjs = model.num_agents + model.tasks.size;
-    let (P, R) = allocatedArgMax[0].to_owned();
-    let mut storage = vec![0.; P.shape().0 * nobjs];
-    cuda_multi_obj_solution(P.view(), R.view(), &mut storage, eps, nobjs as i32);
-    println!("Total runtime {}", t2.elapsed().as_secs_f32());
+
+#[pyfunction]
+pub fn test_warehouse_hybrid(
+    model: &SCPM,
+    env: &Warehouse,
+    w: Vec<f32>,
+    eps: f32,
+    NUM_CPUs: usize, 
+    debug: i32
+) {
+println!(
+"--------------------------\n
+        HYBRID TEST        \n
+--------------------------"
+);
+    cuda_warm_up_gpu();
+    let dbug = debug_level(debug);
+    let t1 = Instant::now();
+    let pairs = 
+        product(0..model.num_agents, 0..model.tasks.size);
+    let models_ls: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
+        let pmdp = product_mdp_bfs(
+            (env.get_init_state(a), 0), 
+            env,
+            &model.tasks.get_task(t), 
+            a as i32, 
+            t as i32, 
+            model.num_agents, 
+            model.num_agents + model.tasks.size,
+            &model.actions
+        );
+        pmdp
+    }).collect(); 
+    match dbug { 
+        Debug::None => { }
+        _ => { 
+            println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+                models_ls.len(), t1.elapsed().as_secs_f32(),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+            );
+        }
+    }
+    let t2 = Instant::now();
+    let _result = hybrid_solver(
+        models_ls, model.num_agents, model.tasks.size, &w, eps, NUM_CPUs, dbug
+    );
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Stage 1 + Stage 2 runtime: {}", t2.elapsed().as_secs_f32());
+            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+        }
+    }
 }

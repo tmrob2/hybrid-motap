@@ -10,7 +10,7 @@ use crate::agent::env::Env;
 use crate::sparse::compress;
 use crate::task::dfa::DFA;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MOProductMDP<S> {
     pub initial_state: (S, i32),
     pub states: Vec<(S, i32)>,

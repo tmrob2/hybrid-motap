@@ -113,5 +113,4 @@ w = [0] * NUM_AGENTS + [1. / NUM_TASKS] * NUM_TASKS
 #hybrid.test_warehouse_model_size(scpm, warehouse_api, w, eps)
 #hybrid.test_warehouse_policy_optimisation(scpm, warehouse_api, w, eps)
 #hybrid.test_warehouse_gpu_policy_optimisation(scpm, warehouse_api, w, eps)
-#hybrid.test_warehouse_CPU_only(scpm, warehouse_api, w, eps)
-hybrid.test_warehouse_GPU_only(scpm, warehouse_api, w, eps)
+hybrid.test_warehouse_GPU_no_stream(scpm, warehouse_api, w, eps)
