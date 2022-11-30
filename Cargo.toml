@@ -24,6 +24,7 @@ rayon = "1.6.0"
 ndarray = "0.15.6"
 sprs = "0.11.0"
 array-macro = "2.1.5"
+hungarian = "1.1.1"
 
 [build-dependencies]
 cc = "1.0"

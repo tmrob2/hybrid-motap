@@ -1,3 +1,6 @@
+KEY CONCEPTS AND CONTRIBUTIONS:
+1. The key thing is parallelising the problem, in a memory safe, and threadsafe manner. How do we achieve memory safety. We achieve memory safety through ownership of each aspect of the model 
+
 Tasks:
 - [x] Build the compressed enabled action data structure
 - [x] Construct the build function for the Product MDP using the compressed data structure
@@ -8,8 +11,8 @@ Tasks:
     - [x] stream the product models to the CPUs computing there r values
     - [x] collect r values in the MPSC and compute the allocation function
 - [x] Build the simplest working example of the single block GPU multi-product model matrix
-    - [ ] construct the policy optimisation kernel for the GPU based on the CSR pointers
-    - [ ] build the multi-objective value iteration implementation based on the compressed data structure
+    - [x] construct the policy optimisation kernel for the GPU based on the CSR pointers
+    - [x] build the multi-objective value iteration implementation based on the compressed data structure
 
 Scratch Notes:
 
@@ -46,3 +49,4 @@ A couple of things to do at this point.
 8. GPU/CPU Streaming:
 We have a total problem which (1) may or may not fit into memory, (2) we will need to do load balancing between the CPU and GPU to make sure that the we are loading the correct device with a sufficient amount of data.
     1. I expect that the device load is depending on the number of cores not on the device memory allocation (which would be much smaller than maximum load). For example, on a device which has 6100 CUDA cores and 48 CPUs I expect the load will be a matrix of maximum shape (6100, n) and 48 M_ij structs for GPU and CPU allocation respectively for maximum parallelisation. 
+    ---THIS IS NOT IMPORTANT: THE MOST IMPORTANT ASPECT IS DATA UP/DOWNLOAD TO THE GPU, the most time consuming step

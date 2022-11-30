@@ -2,11 +2,13 @@ import hybrid
 import itertools
 import random
 
+random.seed(a=12345, version=2)
+
 #
 # Params
 #
 NUM_TASKS = 10
-NUM_AGENTS = 2
+NUM_AGENTS = 10
 
 
 # ------------------------------------------------------------------------------
@@ -32,7 +34,7 @@ print("Feed points", feedpoints)
 actions_to_dir = [[1, 0],[0, 1],[-1, 0],[0, -1]]
 warehouse_api = hybrid.Warehouse(
     size, NUM_AGENTS, feedpoints, init_agent_positions, 
-    actions_to_dir, 0.999
+    actions_to_dir, 0.995
 )
 
 
@@ -90,27 +92,29 @@ def warehouse_replenishment_task():
     
     return task
 
-rack_samples = random.sample([*warehouse_api.racks], k=NUM_TASKS * 2)
+rack_samples = random.sample([*warehouse_api.racks], k=NUM_TASKS)
 #rack_samples = [*warehouse_api.racks]
-#print(rack_samples[0])
+print("rack samples", rack_samples)
 #warehouse_api.add_task_rack_end(0, rack_samples[0])
 #warehouse_api.add_task_rack_start(0, rack_samples[0])
 #warehouse_api.add_task_feed(0, feedpoints[0])
 for k in range(NUM_TASKS):
-    warehouse_api.add_task_rack_end(k, rack_samples[NUM_TASKS + k])
-    warehouse_api.add_task_rack_start(k, rack_samples[0])
+    warehouse_api.add_task_rack_end(k, rack_samples[k])
+    warehouse_api.add_task_rack_start(k, rack_samples[k])
     warehouse_api.add_task_feed(k, feedpoints[0])
 
 mission = hybrid.Mission()
-debug = 1
+debug = 3
 NUM_CPUs = 2
 dfa = warehouse_replenishment_task()
 for task in range(NUM_TASKS):
     mission.add_task(dfa)
 eps = 0.0001
 scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(6)))
-w = [0] * NUM_AGENTS + [1. / NUM_TASKS] * NUM_TASKS
-
+#w = [0] * NUM_AGENTS + [1. / NUM_TASKS] * NUM_TASKS
+#w = [1. / NUM_TASKS + NUM_AGENTS] * (NUM_TASKS + NUM_AGENTS)
+w = [0.01 / NUM_AGENTS] * NUM_AGENTS + [0.99 / NUM_TASKS] * NUM_TASKS
+print("Check sum w = 1", sum(w))
 hybrid.test_warehouse_gpu_only(scpm, warehouse_api, w, eps, debug) 
 
 hybrid.test_warehouse_CPU_only(scpm, warehouse_api, w, eps, debug)

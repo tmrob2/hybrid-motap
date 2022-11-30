@@ -24,6 +24,7 @@ use algorithms::dp::{initial_policy, optimal_policy, optimal_values};
 use crate::algorithms::hybrid::{hybrid_stage2, hybrid_stage1};
 use std::io::prelude::*;
 use std::fs::File;
+use hungarian::minimize;
 
 /*
 -------------------------------------------------------------------
@@ -42,17 +43,42 @@ pub fn hybrid_solver<S>(
     debug: Debug
 ) -> Vec<f32>
 where S: Copy + Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
-    let (models, results) = hybrid_stage1(
+    let (models, M, Pi) = hybrid_stage1(
         output, num_agents, num_tasks, w.to_vec(), eps, CPU_COUNT, debug
     );
-    let allocation = allocation_fn(
-        &results, num_tasks, num_agents
-    );
+    let assignment = 
+        minimize(&M, num_tasks, num_agents);
+
+    match debug {
+        Debug::Verbose2 => {
+            println!("Allocation matrix");
+            for task in 0..num_tasks {
+                for agent in 0..num_agents {
+                    if agent == num_agents - 1 {
+                        print!("{}\n", -M[task * num_tasks + agent]);
+                    } else {
+                        print!("{}, ", -M[task * num_tasks + agent]);
+                    }
+                }
+            }
+            println!("End allocation matrix");
+            println!("assignment:\n{:?}", assignment);
+        }
+        _ => { }   
+    }
+    // The assignment needs to be transformed into something that we can process
+    // i.e. for each allocated task construct a vector which is (a, t, pi)
+    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
+        .enumerate()
+        .filter(|(_i, x)| x.is_some())
+        .map(|(i, x)| 
+            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
+        ).collect();
 
     // Then for each allocation we need to make the argmax P, R matrices
     let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
                               CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
-        = allocation.into_par_iter().map(|(t, a, pi)| {
+        = allocation.into_par_iter().map(|(a, t, pi)| {
         let pmdp: &MOProductMDP<S> = models.iter()
             .filter(|m| m.agent_id == a && m.task_id == t)
             .collect::<Vec<&MOProductMDP<S>>>()[0];
@@ -92,7 +118,9 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     }
     
     let t2 = Instant::now();
-    let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
+    //let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
+    let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
+    let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
     for pmdp in models_ls.iter() {
         let mut pi = choose_random_policy(pmdp);
         let rowblock = pmdp.states.len() as i32;
@@ -131,43 +159,50 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
             &mut stable,
         );
         
-        match results.get_mut(&pmdp.task_id) {
-            Some(v) => { 
-                v[pmdp.agent_id as usize] = Some((
-                    pmdp.agent_id, 
-                    pi.to_owned(), 
-                    x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()]
-                ));
-            }
-            None => {
-                results.insert(
-                    pmdp.task_id,
-                    (0..num_agents).map(|i| if i as i32 == pmdp.agent_id{
-                        // insert the current tuple
-                        Some((i as i32, 
-                        pi.to_owned(),
-                        x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()]))
-                    } else {
-                        None
-                    }).collect::<Vec<Option<(i32, Vec<i32>, f32)>>>()
-                );
-            }
-        }   
+        M[pmdp.task_id as usize * num_agents + pmdp.agent_id as usize] = 
+            (x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()] * 1_000_000.0) as i32;
+        Pi.insert((pmdp.agent_id, pmdp.task_id), pi.to_owned());
     }
+
+    let assignment = 
+        minimize(&M, num_tasks, num_agents);
+
+    match debug {
+        Debug::Verbose2 => {
+            println!("Allocation matrix");
+            for task in 0..num_tasks {
+                for agent in 0..num_agents {
+                    if agent == num_agents - 1 {
+                        print!("{}\n", -M[task * num_tasks + agent]);
+                    } else {
+                        print!("{}, ", -M[task * num_tasks + agent]);
+                    }
+                }
+            }
+            println!("End allocation matrix");
+            println!("assignment:\n{:?}", assignment);
+        }
+        _ => { }   
+    }
+
     match debug {
         Debug::None => { }
         _ => { 
             println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
         }
     }
-    let allocation = allocation_fn(
-        &results, num_tasks, num_agents
-    );
+
+    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
+        .enumerate()
+        .filter(|(_i, x)| x.is_some())
+        .map(|(i, x)| 
+            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
+        ).collect();
 
     // Then for each allocation we need to make the argmax P, R matrices
     let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
                               CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
-        = allocation.into_par_iter().map(|(t, a, pi)| {
+        = allocation.into_par_iter().map(|(a, t, pi)| {
         let pmdp: &MOProductMDP<S> = models_ls.iter()
             .filter(|m| m.agent_id == a && m.task_id == t)
             .collect::<Vec<&MOProductMDP<S>>>()[0];
@@ -204,7 +239,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let t2 = Instant::now();
     // Input all of the models into the rayon framework
     //
-    let output: Vec<(i32, i32, Vec<i32>, f32)> = models_ls.par_iter().map(|pmdp| {
+    let mut output: Vec<(i32, i32, Vec<i32>, f32)> = models_ls.par_iter().map(|pmdp| {
 
         let mut pi = choose_random_policy(&pmdp);
 
@@ -234,33 +269,44 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
                     &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
                     *pmdp.state_map.get(&pmdp.initial_state).unwrap()
                     );
-        (pmdp.task_id, pmdp.agent_id, pi, r)
+        (pmdp.agent_id, pmdp.task_id, pi, r)
     }).collect();
-    //let mut M: Vec<f32> = vec![0.; num_agents * num_tasks];
-    /*let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
+    let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
+    let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
     for (i,j,pi,r) in output.drain(..) {
-        M[j as usize * num_agents + i as usize] = r;
+        M[j as usize * num_agents + i as usize] = (r * 1_000_000.0) as i32;
         Pi.insert((i,j), pi);
-    }*/
-    let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
-    for task in 0..num_tasks {
-        output.iter().filter(|(t, _, _, _)| *t == task as i32)
-            .for_each(|(t, a, pi, r)| {
-            match results.get_mut(t) {
-                Some(v) => {
-                    v[*a as usize] = Some((*a, pi.to_owned(), *r));
-                }
-                None => {
-                    let mut vnew: Vec<Option<(i32, Vec<i32>, f32)>> = vec![None; num_agents];
-                    vnew[*a as usize] = Some((*a, pi.to_owned(), *r));
-                    results.insert(*t, vnew);
+    }
+    
+    let assignment = 
+        minimize(&M, num_tasks, num_agents);
+
+    match debug {
+        Debug::Verbose2 => {
+            println!("Allocation matrix");
+            for task in 0..num_tasks {
+                for agent in 0..num_agents {
+                    if agent == num_agents - 1 {
+                        print!("{}\n", -M[task * num_tasks + agent]);
+                    } else {
+                        print!("{}, ", -M[task * num_tasks + agent]);
+                    }
                 }
             }
-        });
+            println!("End allocation matrix");
+            println!("assignment:\n{:?}", assignment);
+        }
+        _ => { }   
     }
-    let allocation = allocation_fn(
-        &results, num_tasks, num_agents
-    );
+    // The assignment needs to be transformed into something that we can process
+    // i.e. for each allocated task construct a vector which is (a, t, pi)
+    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
+        .enumerate()
+        .filter(|(_i, x)| x.is_some())
+        .map(|(i, x)| 
+            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
+        ).collect();
+    
     match debug {
         Debug::None => { }
         _ => {
@@ -268,10 +314,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
             println!("Total runtime {}", t2.elapsed().as_secs_f32());
         }
     }
-    /*
+    
     let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
                               CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
-        = allocation.into_par_iter().map(|(t, a, pi)| {
+        = allocation.into_par_iter().map(|(a, t, pi)| {
         let pmdp: &MOProductMDP<S> = models_ls.iter()
             .filter(|m| m.agent_id == a && m.task_id == t)
             .collect::<Vec<&MOProductMDP<S>>>()[0];
@@ -293,7 +339,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let kt = num_agents + t as usize;
         returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
     }
-    */
+    
     returns
 }
 

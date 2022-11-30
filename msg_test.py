@@ -88,7 +88,7 @@ scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
 
 #hybrid.msg_test_gpu_stream(scpm, msg_env, w, epsilon, debug)
 
-#hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
+hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
 
-hybrid.test_make_prism_file(scpm, msg_env)
+#hybrid.test_make_prism_file(scpm, msg_env)
 

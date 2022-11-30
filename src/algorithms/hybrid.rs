@@ -43,7 +43,7 @@ pub fn hybrid_stage1<S>(
     epsilon: f32,
     CPU_COUNT: usize,
     debug: crate::Debug
-) -> (Vec<MOProductMDP<S>>, HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>>)
+) -> (Vec<MOProductMDP<S>>, Vec<i32>, HashMap<(i32, i32), Vec<i32>>)
 where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static, 
       MOProductMDP<S>: Send + Clone {
 
@@ -51,10 +51,8 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
     // ksomething that the allocation function expects.
     let t1 = Instant::now();
     let mut models_return: Vec<MOProductMDP<S>> = Vec::new();
-    let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
-    for task in 0..num_tasks {
-        results.insert(task as i32, vec![None; num_agents]);
-    }
+    let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
+    let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
     // First step of the test is to construct an initial random policy
     // which can be chosen directly from the action vector which contains
     // the number of enabled actions in each of the states. 
@@ -101,7 +99,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                             let mut rmv: Vec<f32> = vec![0.; pmdp.P.shape().0];
                             
                             match debug {
-                                Debug::Verbose1 | Debug::Verbose2 => { 
+                                Debug::Verbose1 => { 
                                     println!("Received GPU model: ({},{})", pmdp.agent_id, pmdp.task_id);
                                 }
                                 _ => { }
@@ -129,7 +127,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                             );
                             let r = x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()];
                             match debug {
-                                Debug::Verbose1 | Debug::Verbose2 => { 
+                                Debug::Verbose1 => { 
                                     println!("GPU sending data");                                }
                                 _ => { }
                             }
@@ -165,7 +163,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
 
                             // do the Rayon allocation of threads. 
                             match debug {
-                                Debug::Verbose1 | Debug::Verbose2 => { 
+                                Debug::Verbose1 => { 
                                     println!("CPUs Received data: {:?} models", 
                                     model_ls.iter().map(|m| (m.agent_id, m.task_id)).collect::<Vec<(i32, i32)>>());                              }
                                 _ => { }
@@ -237,20 +235,23 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
         match gpu_r2.try_recv() {
             Ok((gpu_model, pi, data)) => { 
                 match debug {
-                    Debug::Verbose1 | Debug::Verbose2 => { 
+                    Debug::Verbose1 => { 
                         println!("Received some work product from the GPU: [{}, {}]",
                             gpu_model.agent_id, gpu_model.task_id);
                     }
                     _ => { }
                 }
-                let v = results.get_mut(&gpu_model.task_id).unwrap();
-                v[gpu_model.agent_id as usize] = Some((gpu_model.agent_id,pi,data));
+                //let v = results.get_mut(&gpu_model.task_id).unwrap();
+                //v[gpu_model.agent_id as usize] = Some((gpu_model.agent_id,pi,data));
+                M[gpu_model.task_id as usize * num_agents + gpu_model.agent_id as usize] = 
+                    (data * 1_000_000.0) as i32;
+                Pi.insert((gpu_model.agent_id, gpu_model.task_id), pi);
                 models_return.push(gpu_model);
                 received_count += 1;
                 if !models.is_empty() {
                     let gpu_new_data = models.pop().unwrap();
                     match debug {
-                        Debug::Verbose1 | Debug::Verbose2 => { 
+                        Debug::Verbose1 => { 
                             println!("Sending some more work to the GPU: id [{},{}]", 
                                 gpu_new_data.agent_id, gpu_new_data.task_id);
                         }
@@ -275,7 +276,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                 // use drain to make sure we don't double up on memory
                 if !output.is_empty() {
                     match debug {
-                        Debug::Verbose1 | Debug::Verbose2 => { 
+                        Debug::Verbose1 => { 
                             println!("Received some work product from the CPUs: {:?}", 
                                 output.iter().map(|(m, _, _)| (m.agent_id, m.task_id)).collect::<Vec<(i32, i32)>>());
                         }
@@ -283,15 +284,18 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                     }
                     received_count += output.len();
                     output.drain(..).for_each(|(m, pi, r)| {
-                        let v = results.get_mut(&m.task_id).unwrap();
-                        v[m.agent_id as usize] = Some((m.agent_id,pi, r));
+                        //let v = results.get_mut(&m.task_id).unwrap();
+                        //v[m.agent_id as usize] = Some((m.agent_id,pi, r));
+                        M[m.task_id as usize * num_agents + m.agent_id as usize] = 
+                            (r * 1_000_000.0) as i32;
+                        Pi.insert((m.agent_id, m.task_id), pi);
                         models_return.push(m);
                     });
                     let cpu_new_data: Vec<MOProductMDP<S>> = 
                         models.drain(..std::cmp::min(CPU_COUNT, models.len())).collect();
                     
                     match debug {
-                        Debug::Verbose1 | Debug::Verbose2 => { 
+                        Debug::Verbose1 => { 
                             println!("Sending some more work to the CPU: {:?}", 
                                 cpu_new_data.iter().map(|m| (m.agent_id, m.task_id)).collect::<Vec<(i32, i32)>>());
                         }
@@ -323,7 +327,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
         }
     }
 
-    (models_return, results)
+    (models_return, M, Pi)
 }
 
 pub fn hybrid_stage2(
@@ -355,7 +359,7 @@ pub fn hybrid_stage2(
                         MOCtrlMsg::Quit => { break; },
                         MOCtrlMsg::GPUMOData((a, t, P, R, init)) => {
                             match debug {
-                                Debug::Verbose1 | Debug::Verbose2 => { 
+                                Debug::Verbose1 => { 
                                     println!("GPU received MO data: [{},{}]", a, t);
                                 }
                                 _ => { }
@@ -437,10 +441,10 @@ pub fn hybrid_stage2(
         match gpu_r2.try_recv() {
             Ok((a, t, s, r, init)) => {
                 match debug {
-                    Debug::Base => { }
-                    _ => { 
+                    Debug::Verbose1 => { 
                         println!("Received some MO work product from the GPU");
                     }
+                    _ => { }
                 }
                 received_count += 1;
                 r_[a as usize] += r[(a as usize) * s + init];
@@ -461,7 +465,7 @@ pub fn hybrid_stage2(
             Ok(mut v) => { 
                 if !v.is_empty() {
                     match debug {
-                        Debug::Verbose1 | Debug::Verbose2 => { 
+                        Debug::Verbose1 => { 
                             println!("Received some work product from the CPUs");
                         }
                         _ => { }
@@ -479,7 +483,7 @@ pub fn hybrid_stage2(
                             .drain(..std::cmp::min(CPU_COUNT, allocation.len()))
                             .collect();
                     match debug {
-                        Debug::Verbose1 | Debug::Verbose2 => { 
+                        Debug::Verbose1 => { 
                             println!("Sending some more work to the CPU"); 
                         }
                         _ => { }
