@@ -82,11 +82,13 @@ for msg in range(NUM_TASKS):
 scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
 #hybrid.test_threaded_initial_policy(scpm, msg_env, w, epsilon)
 
-hybrid.experiment_gpu_cpu_binary_thread(
-    scpm, msg_env, w, epsilon, CPU_COUNT, debug
-)
+#hybrid.experiment_gpu_cpu_binary_thread(
+#    scpm, msg_env, w, epsilon, CPU_COUNT, debug
+#)
 
-hybrid.msg_test_gpu_stream(scpm, msg_env, w, epsilon, debug)
+#hybrid.msg_test_gpu_stream(scpm, msg_env, w, epsilon, debug)
 
-hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
+#hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
+
+hybrid.test_make_prism_file(scpm, msg_env)
 

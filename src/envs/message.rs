@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use crate::algorithms::dp::{initial_policy, optimal_policy};
 use crate::sparse::argmax::argmaxM;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, debug_level};
+    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, debug_level, prism_file_generator};
 use crate::agent::env::Env;
 use crate::model::momdp::{product_mdp_bfs, choose_random_policy};
 use crate::model::scpm::SCPM;
@@ -115,6 +115,33 @@ where MessageSender: Env<State> {
         model.num_agents + model.tasks.size, 
         &model.actions
     );
+}
+
+#[pyfunction]
+pub fn test_make_prism_file(
+    model: &SCPM,
+    env: &MessageSender
+) -> ()
+where MessageSender: Env<State> {
+    // just want to run an implementation to check a model build outcome
+    let pmdp = product_mdp_bfs(
+        (env.get_init_state(0),0), 
+        env, 
+        &model.tasks.get_task(0), 
+        0, 
+        0, 
+        model.num_agents, 
+        model.num_agents + model.tasks.size, 
+        &model.actions
+    );
+
+    prism_file_generator(
+        pmdp.P.view(), 
+        pmdp.states.len(), 
+        &pmdp.adjusted_state_act_pair, 
+        &pmdp.enabled_actions, 
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+    ).unwrap();
 }
 
 #[pyfunction]

@@ -22,6 +22,8 @@ use sparse::argmax::argmaxM;
 use algorithms::dp::{initial_policy, optimal_policy, optimal_values};
 
 use crate::algorithms::hybrid::{hybrid_stage2, hybrid_stage1};
+use std::io::prelude::*;
+use std::fs::File;
 
 /*
 -------------------------------------------------------------------
@@ -234,6 +236,12 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
                     );
         (pmdp.task_id, pmdp.agent_id, pi, r)
     }).collect();
+    //let mut M: Vec<f32> = vec![0.; num_agents * num_tasks];
+    /*let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
+    for (i,j,pi,r) in output.drain(..) {
+        M[j as usize * num_agents + i as usize] = r;
+        Pi.insert((i,j), pi);
+    }*/
     let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
     for task in 0..num_tasks {
         output.iter().filter(|(t, _, _, _)| *t == task as i32)
@@ -260,6 +268,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
             println!("Total runtime {}", t2.elapsed().as_secs_f32());
         }
     }
+    /*
     let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
                               CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
         = allocation.into_par_iter().map(|(t, a, pi)| {
@@ -284,6 +293,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let kt = num_agents + t as usize;
         returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
     }
+    */
     returns
 }
 
@@ -393,6 +403,59 @@ pub fn allocation_fn(
     allocation
 }
 
+/// Write a PRISM file which represents a Agent x Task pair. 
+pub fn prism_file_generator(
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    state_space: usize,
+    adjusted_sidx: &[i32],
+    enabled_actions: &[i32],
+    initial_state: usize
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create("prism_experiment.mn")?;
+    // document heading
+    writeln!(buffer, "mdp")?;
+    writeln!(buffer)?;
+    writeln!(buffer, "module M1")?;
+    writeln!(buffer)?;
+    writeln!(buffer, "\tx: [0..{}] init {};", state_space, initial_state)?;
+    writeln!(buffer)?;
+    // start model description
+    // end model description
+    // model tail
+    for r in 0..state_space {
+        for a in 0..enabled_actions[r] {
+            write!(buffer, "\t[] x={} -> ", r)?;
+            // write the transition
+            let k = (P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize + 1] - 
+                P.indptr().raw_storage()[(adjusted_sidx[r]+ a) as usize]) as usize;
+            if k > 0 {
+                for j in 0..k {
+                    // data 
+                    let c = P.indices()[P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j];
+                    let p = P.data()[
+                        P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j
+                    ];
+                    if j == 0 && j < k - 1 {
+                        write!(buffer, "{}:(x'={}) ", p, c)?;
+                    } else if j == 0 && j == k - 1 {
+                        write!(buffer, "{}:(x'={});", p, c)?;
+                    } else if j == k - 1 {
+                        write!(buffer, "+ {}:(x'={});", p, c)?;
+                    } else {
+                        write!(buffer, "+ {}:(x'={}) ", p, c)?;
+                    }
+                }
+                write!(buffer, "\n")?;
+            }
+        }
+    }
+    writeln!(buffer)?;
+    writeln!(buffer, "endmodule")?;
+    buffer.flush()?;
+    Ok(())
+}
+
 /*
 -------------------------------------------------------------------
 |                     SPARSE MATRIX DEFINITIONS                   |
@@ -488,6 +551,7 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_warehouse_gpu_only, m)?)?;
     m.add_function(wrap_pyfunction!(msg_test_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_hybrid, m)?)?;
+    m.add_function(wrap_pyfunction!(test_make_prism_file, m)?)?;
     Ok(())
 }
 

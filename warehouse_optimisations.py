@@ -5,8 +5,8 @@ import random
 #
 # Params
 #
-NUM_TASKS = 20
-NUM_AGENTS = 10
+NUM_TASKS = 10
+NUM_AGENTS = 2
 
 
 # ------------------------------------------------------------------------------
@@ -103,7 +103,7 @@ for k in range(NUM_TASKS):
 
 mission = hybrid.Mission()
 debug = 1
-NUM_CPUs = 5
+NUM_CPUs = 2
 dfa = warehouse_replenishment_task()
 for task in range(NUM_TASKS):
     mission.add_task(dfa)
