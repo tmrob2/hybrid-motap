@@ -34,7 +34,7 @@ print("Feed points", feedpoints)
 actions_to_dir = [[1, 0],[0, 1],[-1, 0],[0, -1]]
 warehouse_api = hybrid.Warehouse(
     size, NUM_AGENTS, feedpoints, init_agent_positions, 
-    actions_to_dir, 0.995
+    actions_to_dir, 0.995, 1 # <========================== 1 means normal warehouse layout
 )
 
 

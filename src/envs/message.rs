@@ -134,13 +134,18 @@ where MessageSender: Env<State> {
         model.num_agents + model.tasks.size, 
         &model.actions
     );
-
+    let t = model.tasks.get_task(0);
+    let mut acc: Vec<usize> = Vec::new();
+    for state in pmdp.states.iter().filter(|(_, q)| t.accepting.contains(q)) {
+        acc.push(*pmdp.state_map.get(&state).unwrap());
+    }
     prism_file_generator(
         pmdp.P.view(), 
         pmdp.states.len(), 
         &pmdp.adjusted_state_act_pair, 
         &pmdp.enabled_actions, 
-        *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        &acc
     ).unwrap();
 }
 

@@ -4,7 +4,7 @@ use array_macro::array;
 use pyo3::exceptions::PyValueError;
 use crate::agent::env::Env;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level};
+    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator};
 use crate::sparse::argmax::argmaxM;
 use crate::model::momdp::{product_mdp_bfs, choose_random_policy};
 use crate::model::scpm::SCPM;
@@ -47,7 +47,8 @@ impl Warehouse {
         feedpoints: Vec<Point>, 
         initial_locations: Vec<Point>,
         actions_to_dir: Vec<[i8; 2]>,
-        psuccess: f32
+        psuccess: f32,
+        exp_type: i32
     ) -> Self {
         // call the rack function
         let mut action_map: HashMap<u8, [i8; 2]> = HashMap::new();
@@ -80,10 +81,13 @@ impl Warehouse {
             words,
             psuccess
         };
-        // TODO finish testing of different minimal warehouse layouts.
-        new_env.racks = new_env.place_racks(size);
+        //
         // test: => new_env.racks.insert((0, 1));
-        //new_env.racks.insert((0, 1));
+        if exp_type == 0 {
+            new_env.racks.insert((0, 1));
+        } else {
+            new_env.racks = new_env.place_racks(size);
+        }
         //new_env.racks.insert((0, 2));
         new_env
     }
@@ -452,7 +456,7 @@ println!(
     
     initial_policy(initP.view(), initR.view(), &w_init, eps, &mut r_v, &mut x, &mut y);
 
-    println!("Build + initial policy: {:?} (s)", t1.elapsed().as_secs_f32());
+    //println!("Build + initial policy: {:?} (s)", t1.elapsed().as_secs_f32());
     println!("initial policy only: {:?} (s)", t2.elapsed().as_secs_f32());
     println!("initial policy value: {:?}", x[*pmdp.state_map.get(&pmdp.initial_state).unwrap()]);
     
@@ -828,4 +832,38 @@ println!(
             println!("Total runtime {}", t1.elapsed().as_secs_f32());
         }
     }
+}
+
+#[pyfunction]
+pub fn warehouse_make_prism_file(
+    model: &SCPM,
+    env: &Warehouse
+) -> ()
+where Warehouse: Env<State> {
+    // just want to run an implementation to check a model build outcome
+    let pmdp = product_mdp_bfs(
+        (env.get_init_state(0),0), 
+        env, 
+        &model.tasks.get_task(0), 
+        0, 
+        0, 
+        model.num_agents, 
+        model.num_agents + model.tasks.size, 
+        &model.actions
+    );
+    
+    let t = model.tasks.get_task(0);
+    let mut acc: Vec<usize> = Vec::new();
+    for state in pmdp.states.iter().filter(|(_, q)| t.accepting.contains(q)) {
+        acc.push(*pmdp.state_map.get(&state).unwrap());
+    }
+    prism_file_generator(
+        pmdp.P.view(), 
+        pmdp.states.len(), 
+        &pmdp.adjusted_state_act_pair, 
+        &pmdp.enabled_actions, 
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        &acc
+    ).unwrap();
+    println!("warehouse reachable state: {:?}", acc);
 }

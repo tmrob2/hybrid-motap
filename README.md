@@ -1,5 +1,8 @@
-KEY CONCEPTS AND CONTRIBUTIONS:
-1. The key thing is parallelising the problem, in a memory safe, and threadsafe manner. How do we achieve memory safety. We achieve memory safety through ownership of each aspect of the model 
+# Introduction
+
+# Reproducing Experiments
+
+# Development Notes
 
 Tasks:
 - [x] Build the compressed enabled action data structure

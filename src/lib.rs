@@ -333,6 +333,126 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     }).collect();
     let nobjs = num_agents + num_tasks;
     let mut returns: Vec<f32> = vec![0.; nobjs];
+    let ret_ :Vec<(i32, i32, f32, f32)> = allocatedArgMax.into_par_iter().map(|(a, t, P, R, init)| {
+        let r = optimal_values(P.view(), R.view(), eps, nobjs);
+        let kt = num_agents + t as usize;
+        (a, t, r[(a as usize) * P.shape().0 + init], r[kt * P.shape().0 + init])
+    }).collect();
+    
+    for (a, t, a_cost, t_prob) in ret_.into_iter() {
+        returns[a as usize] += a_cost;
+        returns[num_agents + t as usize] += t_prob;
+    }
+    
+    returns
+}
+
+pub fn single_cpu_solver<S>(
+    models_ls: Vec<MOProductMDP<S>>,
+    num_agents: usize,
+    num_tasks: usize,
+    w: &[f32],
+    eps: f32,
+    debug: Debug
+) -> Vec<f32>
+where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
+    let t2 = Instant::now();
+    // Input all of the models into the rayon framework
+    //
+    let mut output: Vec<(i32, i32, Vec<i32>, f32)> = models_ls.iter().map(|pmdp| {
+
+        let mut pi = choose_random_policy(&pmdp);
+
+        let rowblock = pmdp.states.len() as i32;
+        let pcolblock = rowblock as i32;
+        let rcolblock = (num_agents + num_tasks) as i32;
+        let initP = 
+            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, 
+                    &pmdp.adjusted_state_act_pair);
+        let initR = 
+            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, 
+                    &pmdp.adjusted_state_act_pair);
+
+        let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
+        let mut x: Vec<f32> = vec![0.; initP.shape().1];
+        let mut y: Vec<f32> = vec![0.; initP.shape().0];
+        
+        initial_policy(initP.view(), initR.view(), &w, eps, 
+                    &mut r_v, &mut x, &mut y);
+
+        // taking the initial policy and the value vector for the initial policy
+        // what is the optimal policy
+        let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
+        let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
+        let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, eps, 
+                    &mut r_v, &mut x, &mut y, &mut pi, 
+                    &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
+                    *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+                    );
+        (pmdp.agent_id, pmdp.task_id, pi, r)
+    }).collect();
+    let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
+    let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
+    for (i,j,pi,r) in output.drain(..) {
+        M[j as usize * num_agents + i as usize] = (r * 1_000_000.0) as i32;
+        Pi.insert((i,j), pi);
+    }
+    
+    let assignment = 
+        minimize(&M, num_tasks, num_agents);
+
+    match debug {
+        Debug::Verbose2 => {
+            println!("Allocation matrix");
+            for task in 0..num_tasks {
+                for agent in 0..num_agents {
+                    if agent == num_agents - 1 {
+                        print!("{}\n", -M[task * num_tasks + agent]);
+                    } else {
+                        print!("{}, ", -M[task * num_tasks + agent]);
+                    }
+                }
+            }
+            println!("End allocation matrix");
+            println!("assignment:\n{:?}", assignment);
+        }
+        _ => { }   
+    }
+    // The assignment needs to be transformed into something that we can process
+    // i.e. for each allocated task construct a vector which is (a, t, pi)
+    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
+        .enumerate()
+        .filter(|(_i, x)| x.is_some())
+        .map(|(i, x)| 
+            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
+        ).collect();
+    
+    match debug {
+        Debug::None => { }
+        _ => {
+            println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
+            println!("Total runtime {}", t2.elapsed().as_secs_f32());
+        }
+    }
+    
+    let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
+                              CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
+        = allocation.into_iter().map(|(a, t, pi)| {
+        let pmdp: &MOProductMDP<S> = models_ls.iter()
+            .filter(|m| m.agent_id == a && m.task_id == t)
+            .collect::<Vec<&MOProductMDP<S>>>()[0];
+        let rowblock = pmdp.states.len() as i32;
+        let pcolblock = rowblock as i32;
+        let rcolblock = (num_agents + num_tasks) as i32;
+        let argmaxP = 
+            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
+        let argmaxR = 
+            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
+        let init = *pmdp.state_map.get(&pmdp.initial_state).unwrap();
+        (a, t, argmaxP, argmaxR, init)
+    }).collect();
+    let nobjs = num_agents + num_tasks;
+    let mut returns: Vec<f32> = vec![0.; nobjs];
     for (a, t, P, R, init) in allocatedArgMax.into_iter() {
         let r = optimal_values(P.view(), R.view(), eps, nobjs);
         returns[a as usize] += r[(a as usize) * P.shape().0 + init];
@@ -455,7 +575,8 @@ pub fn prism_file_generator(
     state_space: usize,
     adjusted_sidx: &[i32],
     enabled_actions: &[i32],
-    initial_state: usize
+    initial_state: usize,
+    accepting_states: &[usize]
 ) -> std::io::Result<()> 
 {
     let mut buffer = File::create("prism_experiment.mn")?;
@@ -498,6 +619,19 @@ pub fn prism_file_generator(
     }
     writeln!(buffer)?;
     writeln!(buffer, "endmodule")?;
+    writeln!(buffer)?;
+    write!(buffer, "label \"accepting\" = x=")?;
+    let mut count = 0;
+    for state in accepting_states.iter() {
+        if count == 0 {
+            write!(buffer, "{}", state)?;
+        } else if count == accepting_states.len() - 1 {
+            write!(buffer, " | x={};", state)?;
+        } else { 
+            write!(buffer, " | x={}", state)?;
+        }
+        count += 1;
+    }
     buffer.flush()?;
     Ok(())
 }
@@ -598,6 +732,7 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(msg_test_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(test_make_prism_file, m)?)?;
+    m.add_function(wrap_pyfunction!(warehouse_make_prism_file, m)?)?;
     Ok(())
 }
 

@@ -153,7 +153,6 @@ pub fn optimal_policy(
     // First thing is to construct the sparse rewards matrix R.w dot product
     mul_acc_mat_vec_csr(R, w, &mut *r_v);
     //let mut k: usize = 0;
-
     while !policy_stable {
 
         // compute the sparse matrix vector dot product of P.x and add it to r_v to
