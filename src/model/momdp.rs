@@ -1,14 +1,15 @@
 #![allow(non_snake_case)]
 use std::collections::VecDeque;
 use std::hash::Hash;
-use rand::Rng;
+//use rand::Rng;
 
 use hashbrown::{HashMap, HashSet};
 use sprs::{CsMatBase, TriMatI};
-use crate::reverse_key_value_pairs;
+//use crate::reverse_key_value_pairs;
 use crate::agent::env::Env;
-use crate::sparse::compress;
 use crate::task::dfa::DFA;
+
+use super::general::ModelFns;
 
 #[derive(Clone, Debug)]
 pub struct MOProductMDP<S> {
@@ -22,18 +23,8 @@ pub struct MOProductMDP<S> {
     pub adjusted_state_act_pair: Vec<i32>, 
     pub enabled_actions: Vec<i32>, 
     pub state_map: HashMap<(S, i32), usize>,
-    reverse_state_map: HashMap<usize, (S, i32)>
-}
-
-pub fn choose_random_policy<S>(mdp: &MOProductMDP<S>) -> Vec<i32> {
-    let mut pi: Vec<i32> = vec![-1; mdp.states.len()];
-    let mut rng = rand::thread_rng();
-    for s in 0..mdp.states.len() {
-        let rand_act = rng
-            .gen_range(0..mdp.enabled_actions[s]);
-        pi[s] = rand_act;
-    }
-    pi
+    reverse_state_map: HashMap<usize, (S, i32)>,
+    pub qmap: Vec<i32>
 }
 
 impl<S> MOProductMDP<S>
@@ -55,7 +46,8 @@ where S: Copy + Eq + Hash {
             adjusted_state_act_pair: Vec::new(),
             enabled_actions: Vec::new(),
             state_map: HashMap::new(),
-            reverse_state_map: HashMap::new() 
+            reverse_state_map: HashMap::new(),
+            qmap: Vec::new()
         }
     }
 
@@ -67,6 +59,16 @@ where S: Copy + Eq + Hash {
 
     fn insert_state_mapping(&mut self, state: (S, i32), state_idx: usize) {
         self.state_map.insert(state, state_idx);
+    }
+}
+
+impl<S> ModelFns<(S, i32)> for MOProductMDP<S> {
+    fn get_states(&self) -> &[(S, i32)] {
+        &self.states
+    }
+
+    fn get_enabled_actions(&self) -> &[i32] {
+        &self.enabled_actions
     }
 }
 
@@ -88,7 +90,8 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
     let mut state_rewards: HashSet<i32> = HashSet::new();
     let mut stack: VecDeque<(S, i32)> = VecDeque::new();
     let mut adjusted_state_action: HashMap<i32, i32> = HashMap::new();
-    let mut enabled_actions: HashMap<i32, i32> = HashMap::new();
+    let mut enabled_actions: HashMap<i32, i32> = HashMap::new();    
+    let mut qmap: HashMap<usize, i32> = HashMap::new();
 
     // construct a new triple matrix fo rthe transitions and the rewards
     // Transition triples
@@ -112,6 +115,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
     //for _ in 0..5 {
         let (s, q) = stack.pop_front().unwrap();
         let sidx = *pmdp.state_map.get(&(s, q)).unwrap();
+        match task.accepting.contains(&q) || task.done.contains(&q) || task.rejecting.contains(&q) {
+            true => { qmap.insert(sidx, 0); }
+            false => { qmap.insert(sidx, 1); }
+        }
         let row_idx = *adjusted_state_action.get(&(sidx as i32)).unwrap();
         for action in 0..actions.len() {
             match mdp.step_(s, action as u8, task_id) {
@@ -176,13 +183,16 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
 
     let mut vadj_pairs: Vec<i32> = vec![0; pmdp.states.len()];
     let mut venbact: Vec<i32> = vec![0; pmdp.states.len()];
+    let mut vqmap: Vec<i32> = vec![0; pmdp.states.len()];
     for sidx in 0..pmdp.states.len() {
         vadj_pairs[sidx] = adjusted_state_action.remove(&(sidx as i32)).unwrap();
         venbact[sidx] = enabled_actions.remove(&(sidx as i32)).unwrap();
+        vqmap[sidx] = qmap.remove(&sidx).unwrap();
     }
     //println!("adjusted states\n{:?}", vadj_pairs);
     pmdp.adjusted_state_act_pair = vadj_pairs;
     pmdp.enabled_actions = venbact;
+    pmdp.qmap = vqmap;
     
     // compress the matrices into CSR format
     pmdp.P = pTriMatr.to_csr();

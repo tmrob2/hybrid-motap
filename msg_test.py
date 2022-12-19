@@ -69,10 +69,10 @@ print("CPU GPU Equivalence Test")
 w = [0.0, 1.0]
 hybrid.test_cudacpu_opt_pol(scpm, msg_env, w, epsilon)
 #
-NUM_TASKS = 2
-NUM_AGENTS = 2
+NUM_TASKS = 1
+NUM_AGENTS = 1
 CPU_COUNT = 2
-debug = 2
+debug = 1
 
 w = [0.] * NUM_AGENTS + [1./NUM_TASKS] * NUM_TASKS
 mission = hybrid.Mission()
@@ -88,7 +88,9 @@ scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
 
 #hybrid.msg_test_gpu_stream(scpm, msg_env, w, epsilon, debug)
 
-hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
+# hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
 
-#hybrid.test_make_prism_file(scpm, msg_env)
+hybrid.test_make_prism_file(scpm, msg_env, "model.tra", "model.sta.rew")
+
+#hybrid.test_ctmdp_build(scpm, msg_env, debug, w, epsilon, "model.tra", "model.lab")
 

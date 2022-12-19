@@ -10,7 +10,7 @@
 #include <thrust/execution_policy.h>
 
 int MAX_ITERATIONS = 1000;
-const int MAX_UNSTABLE = 50;
+const int MAX_UNSTABLE = 30;
 /*
 #######################################################################
 #                           KERNELS                                   #

@@ -2,16 +2,20 @@ use pyo3::prelude::*;
 use hashbrown::{HashSet, HashMap};
 use array_macro::array;
 use pyo3::exceptions::PyValueError;
+use sprs::prod::mul_acc_mat_vec_csr;
 use crate::agent::env::Env;
+use crate::model::centralised::CTMDP_bfs;
+use crate::model::general::ModelFns;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator};
+    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator, single_cpu_solver, ctmdp_cpu_solver, prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, prism_explicit_label_file_generator, storm_explicit_tra_file_generator, storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator, ctmdp_gpu_solver};
 use crate::sparse::argmax::argmaxM;
-use crate::model::momdp::{product_mdp_bfs, choose_random_policy};
+use crate::model::momdp::product_mdp_bfs;
 use crate::model::scpm::SCPM;
 use crate::model::momdp::MOProductMDP;
 use crate::algorithms::dp::{initial_policy, optimal_policy};
 use std::time::Instant;
 use rayon::prelude::*;
+use crate::choose_random_policy;
 
 type Point = (i8, i8);
 type State = (Point, u8, Option<Point>);
@@ -437,7 +441,9 @@ println!(
     println!("ProdMDP |S|: {}", pmdp.states.len());
     println!("ProdMPD |P|: {}", pmdp.P.nnz());
 
-    let mut pi = choose_random_policy(&pmdp);
+    let state_size = pmdp.get_states().len();
+    let enabled_actions = pmdp.get_enabled_actions();
+    let mut pi = choose_random_policy(state_size, enabled_actions);
 
     let rowblock = pmdp.states.len() as i32;
     let pcolblock = rowblock as i32;
@@ -540,7 +546,9 @@ println!(
     println!("ProdMDP |S|: {}", pmdp.states.len());
     println!("ProdMPD |P|: {}", pmdp.P.nnz());
 
-    let mut pi = choose_random_policy(&pmdp);
+    let state_size = pmdp.get_states().len();
+    let enabled_actions = pmdp.get_enabled_actions();
+    let mut pi = choose_random_policy(state_size, enabled_actions);
 
     let rowblock = pmdp.states.len() as i32;
     let pcolblock = rowblock as i32;
@@ -646,6 +654,68 @@ println!(
 }
 
 #[pyfunction]
+pub fn test_warehouse_single_CPU(
+    model: &SCPM,
+    env: &mut Warehouse,
+    w: Vec<f32>,
+    eps: f32,
+    debug: i32
+    //mut outputs: MDPOutputs
+) -> () //(Vec<f32>, MDPOutputs)
+where Warehouse: Env<State> {
+println!(
+"--------------------------\n
+        SINGLE CPU TEST    \n
+--------------------------"
+);
+    let t1 = Instant::now();
+    let dbug = debug_level(debug);
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Constructing MDP of agent environment");
+        }
+    }
+    let pairs = 
+        product(0..model.num_agents, 0..model.tasks.size);
+    let models_ls: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
+        let pmdp = product_mdp_bfs(
+            (env.get_init_state(a), 0), 
+            env,
+            &model.tasks.get_task(t), 
+            a as i32, 
+            t as i32, 
+            model.num_agents, 
+            model.num_agents + model.tasks.size,
+            &model.actions
+        );
+        pmdp
+    }).collect(); 
+    match dbug{
+        Debug::None => { }
+        _ => { 
+            println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+                models_ls.len(), t1.elapsed().as_secs_f32(),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+            );
+        }
+    }
+    let t2 = Instant::now();
+    let result = single_cpu_solver(
+        models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
+    );
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Stage 1 + Stage 2 runtime: {}", t2.elapsed().as_secs_f32());
+            println!("Result: {:?}", result);
+            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+        }
+    }
+}
+
+#[pyfunction]
 pub fn test_warehouse_GPU_no_stream(
     model: &SCPM,
     env: &mut Warehouse,
@@ -685,7 +755,9 @@ where Warehouse: Env<State> {
 
     let t2 = Instant::now();
     for pmdp in models_ls.iter() {
-        let mut pi = choose_random_policy(pmdp);
+        let state_size = pmdp.get_states().len();
+        let enabled_actions = pmdp.get_enabled_actions();
+        let mut pi = choose_random_policy(state_size, enabled_actions);
 
         let rowblock = pmdp.states.len() as i32;
         let pcolblock = rowblock as i32;
@@ -837,7 +909,9 @@ println!(
 #[pyfunction]
 pub fn warehouse_make_prism_file(
     model: &SCPM,
-    env: &Warehouse
+    env: &Warehouse,
+    name: String,
+    rew_name: String
 ) -> ()
 where Warehouse: Env<State> {
     // just want to run an implementation to check a model build outcome
@@ -863,7 +937,167 @@ where Warehouse: Env<State> {
         &pmdp.adjusted_state_act_pair, 
         &pmdp.enabled_actions, 
         *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        &acc,
+        &pmdp.qmap
+    ).unwrap();
+    //println!("warehouse reachable state: {:?}", acc);
+
+    prism_explicit_tra_file_generator(
+        pmdp.P.view(), 
+        pmdp.states.len(), 
+        &pmdp.adjusted_state_act_pair, 
+        &pmdp.enabled_actions
+    ).unwrap();
+    let mut rtn = vec![0.; pmdp.R.shape().0];
+    let w = vec![1.0, 0.0];
+    //println!("R shape: {:?}", pmdp.R.shape());
+    //println!("{:?}", pmdp.R.to_dense());
+    mul_acc_mat_vec_csr(pmdp.R.view(), &w , &mut rtn);
+    prism_explicit_staterew_file_generator(
+        &rtn, pmdp.states.len(), &pmdp.adjusted_state_act_pair
+    ).unwrap();
+    prism_explicit_label_file_generator(
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
         &acc
     ).unwrap();
-    println!("warehouse reachable state: {:?}", acc);
+
+    storm_explicit_tra_file_generator(
+        pmdp.P.view(), 
+        pmdp.states.len(), 
+        &pmdp.adjusted_state_act_pair, 
+        &pmdp.enabled_actions,
+        &name
+    ).unwrap();
+    /*storm_explicit_staterew_file_generator(
+        &rtn, 
+        pmdp.states.len(),
+        &pmdp.adjusted_state_act_pair,
+        &rew_name
+    ).unwrap();*/
+    prism_explicit_transrew_file_generator(
+        pmdp.states.len(), 
+        pmdp.P.view(), 
+        &pmdp.enabled_actions, 
+        &pmdp.adjusted_state_act_pair,
+        &rtn
+    ).unwrap();
+    storm_explicit_label_file_generator(
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        &acc
+    ).unwrap();
+}
+
+#[pyfunction]
+pub fn test_warehouse_ctmdp(
+    model: &SCPM,
+    env: &Warehouse,
+    debug: i32,
+    w: Vec<f32>,
+    eps: f32
+    //tra_name: String,
+    //label_name: String
+) 
+where Warehouse: Env<State> {
+    let ct_actions = [0, 1, 2];
+    let base_actions: Vec<i32> = model.actions.iter()
+        .map(|a| *a + 3)
+        .collect();
+    let total_actions = [&ct_actions[..], &base_actions[..]].concat();
+    let init_agents_states: Vec<State> = (0..model.num_agents)
+        .map(|ii| env.get_init_state(ii))
+        .collect();
+    let ctmdp = CTMDP_bfs(
+        (env.get_init_state(0), 0, 0, Vec::new(), 0), 
+        env, 
+        model.num_agents, 
+        model.num_agents + model.tasks.size, 
+        model, 
+        &total_actions[..], 
+        &init_agents_states
+    );
+
+    let dbg = match debug {
+        2 => Debug::Verbose1,
+        1 => Debug::Base,
+        3 => Debug::Verbose2,
+        _ => Debug::None,
+    };
+
+    match dbg {
+        Debug::None => { }
+        _ => { 
+            println!("|S|: {}, |P|: {}", ctmdp.P.shape().1, ctmdp.P.nnz());
+        }
+    }
+
+    let r = ctmdp_cpu_solver(
+        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
+    );
+    println!("{:?}", r);
+
+    /*
+    // construct the explicit transition model
+    storm_explicit_tra_file_generator(
+        ctmdp.P.view(), 
+        ctmdp.states.len(), 
+        &ctmdp.adjusted_state_act_pair, 
+        &ctmdp.enabled_actions,
+        &tra_name
+    ).unwrap();
+
+    storm_ctmdp_explicit_label_file_generator(
+        *ctmdp.state_map.get(&ctmdp.initial_state).unwrap(), 
+        &ctmdp.accepting, 
+        model.tasks.size, 
+        &label_name
+    ).unwrap();
+    */
+}
+
+#[pyfunction]
+pub fn test_warehouse_ctmdp_gpu(
+    model: &SCPM,
+    env: &Warehouse,
+    debug: i32,
+    w: Vec<f32>,
+    eps: f32
+) 
+where Warehouse: Env<State> {
+    let ct_actions = [0, 1, 2];
+    let base_actions: Vec<i32> = model.actions.iter()
+        .map(|a| *a + 3)
+        .collect();
+    let total_actions = [&ct_actions[..], &base_actions[..]].concat();
+    let init_agents_states: Vec<State> = (0..model.num_agents)
+        .map(|ii| env.get_init_state(ii))
+        .collect();
+    let ctmdp = CTMDP_bfs(
+        (env.get_init_state(0), 0, 0, Vec::new(), 0), 
+        env, 
+        model.num_agents, 
+        model.num_agents + model.tasks.size, 
+        model, 
+        &total_actions[..], 
+        &init_agents_states
+    );
+
+    let dbg = match debug {
+        2 => Debug::Verbose1,
+        1 => Debug::Base,
+        3 => Debug::Verbose2,
+        _ => Debug::None,
+    };
+
+    match dbg {
+        Debug::None => { }
+        _ => { 
+            println!("|S|: {}, |P|: {}", ctmdp.P.shape().1, ctmdp.P.nnz());
+        }
+    }
+
+    let r = ctmdp_gpu_solver(
+        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
+    );
+    println!("{:?}", r);
+
 }

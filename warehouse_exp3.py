@@ -7,9 +7,8 @@ random.seed(a=12345, version=2)
 #
 # Params
 #
-NUM_TASKS = 1
-NUM_AGENTS = 1
-
+NUM_TASKS = 2
+NUM_AGENTS = 2
 
 # ------------------------------------------------------------------------------
 # SETUP: Construct the structures for agent to recognise task progress
@@ -22,13 +21,14 @@ task_progress = {0: "initial", 1: "in_progress", 2: "success", 3: "fail"}
 
 #init_agent_positions = [(0, 0), (0, 2), (0, 4), (0, 6), (2, 0), 
 #                        (2, 0), (4, 0), (6, 0), (8, 0), (9, 0)]
-init_agent_positions = [(0,0)]
-# row 1: size = 3, set whouse param <=== to 0
-# row 2: size = 6, set whouse param <=== to 1
-# row 3: size = 8, set whouse param <=== to 1
-# row 4: size = 10, set whouse param <=== to 1
-size = 10
+size = 6
+#init_agent_positions = [(0,0)]
 feedpoints = [(size - 1, size // 2)]
+outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + \
+                [(size - 1, i) for i in range(size) if i not in feedpoints] + \
+                [(i, size - 1) for i in range(size)]
+init_agent_positions = random.choices(outer_square, k=NUM_AGENTS)
+
 #feedpoints = [(2, 2)]
 print("Feed points", feedpoints)
 
@@ -97,27 +97,29 @@ def warehouse_replenishment_task():
     return task
 
 #rack_samples = random.sample([*warehouse_api.racks], k=NUM_TASKS)
-rack_samples = [*warehouse_api.racks]
+#rack_samples = [*warehouse_api.racks]
+rack_samples = random.choices([*warehouse_api.racks], k=NUM_TASKS)
 print("rack samples", rack_samples)
-warehouse_api.add_task_rack_end(0, rack_samples[0])
-warehouse_api.add_task_rack_start(0, rack_samples[0])
-warehouse_api.add_task_feed(0, feedpoints[0])
-#for k in range(NUM_TASKS):
-#    warehouse_api.add_task_rack_end(k, rack_samples[k])
-#    warehouse_api.add_task_rack_start(k, rack_samples[k])
-#    warehouse_api.add_task_feed(k, feedpoints[0])
+#warehouse_api.add_task_rack_end(0, rack_samples[0])
+#warehouse_api.add_task_rack_start(0, rack_samples[0])
+#warehouse_api.add_task_feed(0, feedpoints[0])
+for k in range(NUM_TASKS):
+    warehouse_api.add_task_rack_end(k, rack_samples[k])
+    warehouse_api.add_task_rack_start(k, rack_samples[k])
+    warehouse_api.add_task_feed(k, feedpoints[0])
 
 mission = hybrid.Mission()
 dfa = warehouse_replenishment_task()
-mission.add_task(dfa)
+for task in range(NUM_TASKS):
+    mission.add_task(dfa)
 eps = 1.0e-6
 scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(6)))
 #w = [0] * NUM_AGENTS + [1. / NUM_TASKS] * NUM_TASKS
 #w = [1. / NUM_TASKS + NUM_AGENTS] * (NUM_TASKS + NUM_AGENTS)
-#w = [0.01 / NUM_AGENTS] * NUM_AGENTS + [0.99 / NUM_TASKS] * NUM_TASKS
-w = [0., 1]
+w = [0.01 / NUM_AGENTS] * NUM_AGENTS + [0.99 / NUM_TASKS] * NUM_TASKS
+#w = [0., 1]
 print("Check sum w = 1", sum(w))
+debug = 1
 
-hybrid.warehouse_make_prism_file(scpm, warehouse_api, "w.model.tra", "w.model.sta.rew")
-hybrid.test_warehouse_single_CPU(scpm, warehouse_api, w, eps, 1)
-#hybrid.test_warehouse_gpu_only(scpm, warehouse_api, w, eps, 1)
+#hybrid.test_warehouse_ctmdp(scpm, warehouse_api, debug, w, eps)
+hybrid.test_warehouse_ctmdp_gpu(scpm, warehouse_api, debug, w, eps)

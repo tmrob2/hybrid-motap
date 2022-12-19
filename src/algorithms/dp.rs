@@ -14,7 +14,7 @@ An epsilon threshold for ending value iteration
 use sprs::{CsMatBase, prod::mul_acc_mat_vec_csr};
 
 const MAX_ITERATIONS: usize = 1000;
-const MAX_UNSTABLE: i32 = 30;
+const MAX_UNSTABLE: i32 = 50;
 
 fn abs_max_diff(
     x: &[f32], y: &mut [f32], 
@@ -95,6 +95,41 @@ fn action_comparison(
     (policy_stable, max_eps)
 }
 
+fn action_comparison2(
+    y: &mut [f32],
+    enabled_actions: &[i32],
+    adj_sidx: &[i32],
+    xold: &mut [f32],
+    pi: &mut [i32],
+) -> (bool, f32) {
+    let mut max_eps: f32 = 0.;
+    let mut policy_stable: bool = true;
+    for r in 0..xold.len() {
+        //let mut max_value = -f32::INFINITY;
+        //let mut argmax_a: i32 = -1;
+        for a in 0..enabled_actions[r] {
+            if y[(adj_sidx[r] + a) as usize] > xold[r] {
+                //max_value = y[(adj_sidx[r] + a) as usize];
+                if y[(adj_sidx[r] + a) as usize] - xold[r] > max_eps {
+                    //println!("max eps new: {}", max_eps)
+                    max_eps = y[(adj_sidx[r] + a) as usize] - xold[r];
+                }
+                xold[r] = y[(adj_sidx[r] + a) as usize];
+                //argmax_a = a;
+                pi[r] = a;
+                policy_stable = false;
+            }
+        }
+        /*xnew[r] = max_value;
+        if max_value - xold[r] > epsilon {
+            policy_stable = false;
+            pi[r] = argmax_a;
+            max_eps = max_value - xold[r];
+        }*/
+    }
+    (policy_stable, max_eps)
+}
+
 pub fn initial_policy(
     P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the transition matrix CSR fmt
     R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the rewards matrix CSR fmt
@@ -112,13 +147,16 @@ pub fn initial_policy(
     let mut unstable = vec![0; x.len()];
     mul_acc_mat_vec_csr(R, w, &mut *r_v);
     let mut k: usize = 0;
+    let mut i;
 
     while k < MAX_ITERATIONS && eps > epsilon && eps != f32::INFINITY {
 
         // compute the sparse matrix vector dot product of P.x and add it to r_v to
         // i.e. y = r + P.x
-        for (i, y_) in y.iter_mut().enumerate() {
+        i = 0;
+        for y_ in y.iter_mut() {
             *y_ = r_v[i];
+            i += 1;
         }
         //println!("y before  P.v: \n{:?}", y);
         mul_acc_mat_vec_csr(P, &*x, &mut *y);
@@ -126,8 +164,10 @@ pub fn initial_policy(
         // check the difference between x and y
         eps = abs_max_diff(&x, y, &mut epsold_, &mut unstable);
         
-        for (i, x_) in x.iter_mut().enumerate() {
+        i = 0;
+        for x_ in x.iter_mut() {
             *x_ = y[i];
+            i += 1;
         }
         //println!("eps: {}, x:\n{:.2?}", eps, x);        
         k += 1;
@@ -149,27 +189,38 @@ pub fn optimal_policy(
 ) -> f32 {
     let mut _eps = 1.0;
     let mut policy_stable = false;
-    let mut xtmp = vec![0.; x.len()];
+    //let mut xtmp = vec![0.; x.len()];
+    let mut epsold_ = vec![0.; x.len()];
+    let mut unstable = vec![0; x.len()];
     // First thing is to construct the sparse rewards matrix R.w dot product
     mul_acc_mat_vec_csr(R, w, &mut *r_v);
     //let mut k: usize = 0;
-    while !policy_stable {
+    let mut i: usize;
+    let mut num_loops = 0;
+    while !policy_stable && num_loops < MAX_ITERATIONS {
+    //while _eps > epsilon && num_loops < MAX_ITERATIONS {
 
         // compute the sparse matrix vector dot product of P.x and add it to r_v to
         // i.e. y = r + P.x
-        for (i, y_) in y.iter_mut().enumerate() {
+        i = 0;
+        for y_ in y.iter_mut() {
             *y_ = r_v[i];
+            i += 1;
         }
         //println!("y before  P.v: \n{:?}", y);
         mul_acc_mat_vec_csr(P, &*x, &mut *y);
 
-        (policy_stable, _eps) = action_comparison(y, enabled_actions, adj_sidx, 
-                                            &mut xtmp, x, pi, epsilon);
-        for (i, x_) in x.iter_mut().enumerate() {
+        (policy_stable, _eps) = action_comparison2(y, enabled_actions, adj_sidx, x, pi);
+        
+        i = 0;
+        /*for x_ in x.iter_mut() {
             *x_ = xtmp[i];
-        }
+            i += 1;
+        }*/
 
-        //println!("eps: {}", eps);
+        //println!("eps: {}", _eps);
+        
+        num_loops += 1;
     }
     x[initial_state_index]
 }
@@ -226,7 +277,11 @@ pub fn optimal_values(
             for (i, x_) in XStorage[k * m.. (k + 1) *m].iter_mut().enumerate() {
                 *x_ = y[i];
             }
+            /*if k == 7 {
+                println!("\n{:?}", &XStorage[k * m.. (k + 1) *m]);
+            }*/
             eps = f32::max(k_eps, eps);
+            //println!("eps: {}", eps);
         }
         ii += 1;
     }

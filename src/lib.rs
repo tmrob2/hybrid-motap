@@ -7,16 +7,19 @@ pub mod envs;
 pub mod algorithms;
 pub mod sparse;
 pub mod tests;
+use model::centralised::CTMDP;
+use model::general::ModelFns;
 //use envs::{message::MessageSender, warehouse::Warehouse};
 use model::scpm::SCPM;
 use pyo3::prelude::*;
+use rand::Rng;
 use sprs::CsMatBase;
 use task::dfa::{DFA, Mission};
 use envs::message::*;
 use hashbrown::HashMap;
 use std::{hash::Hash, time::Instant};
 use envs::warehouse::*;
-use model::momdp::{MOProductMDP, choose_random_policy};
+use model::momdp::MOProductMDP;
 use rayon::prelude::*;
 use sparse::argmax::argmaxM;
 use algorithms::dp::{initial_policy, optimal_policy, optimal_values};
@@ -122,7 +125,9 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
     let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
     for pmdp in models_ls.iter() {
-        let mut pi = choose_random_policy(pmdp);
+        let enabled_actions = pmdp.get_enabled_actions();
+        let state_size = pmdp.get_states().len();
+        let mut pi = choose_random_policy(state_size, enabled_actions);
         let rowblock = pmdp.states.len() as i32;
         let pcolblock = rowblock as i32;
         let rcolblock = (num_agents + num_tasks) as i32;
@@ -240,8 +245,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     // Input all of the models into the rayon framework
     //
     let mut output: Vec<(i32, i32, Vec<i32>, f32)> = models_ls.par_iter().map(|pmdp| {
-
-        let mut pi = choose_random_policy(&pmdp);
+        
+        let enabled_actions = pmdp.get_enabled_actions();
+        let state_size = pmdp.get_states().len();
+        let mut pi = choose_random_policy(state_size, enabled_actions);
 
         let rowblock = pmdp.states.len() as i32;
         let pcolblock = rowblock as i32;
@@ -311,7 +318,6 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         Debug::None => { }
         _ => {
             println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-            println!("Total runtime {}", t2.elapsed().as_secs_f32());
         }
     }
     
@@ -338,7 +344,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let kt = num_agents + t as usize;
         (a, t, r[(a as usize) * P.shape().0 + init], r[kt * P.shape().0 + init])
     }).collect();
-    
+
     for (a, t, a_cost, t_prob) in ret_.into_iter() {
         returns[a as usize] += a_cost;
         returns[num_agents + t as usize] += t_prob;
@@ -360,8 +366,9 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     // Input all of the models into the rayon framework
     //
     let mut output: Vec<(i32, i32, Vec<i32>, f32)> = models_ls.iter().map(|pmdp| {
-
-        let mut pi = choose_random_policy(&pmdp);
+        let enabled_actions = pmdp.get_enabled_actions();
+        let state_size = pmdp.get_states().len();
+        let mut pi = choose_random_policy(state_size, enabled_actions);
 
         let rowblock = pmdp.states.len() as i32;
         let pcolblock = rowblock as i32;
@@ -431,7 +438,6 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         Debug::None => { }
         _ => {
             println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-            println!("Total runtime {}", t2.elapsed().as_secs_f32());
         }
     }
     
@@ -460,6 +466,176 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
     }
     
+    returns
+}
+
+pub fn ctmdp_cpu_solver<S>(
+    ctmdp: &CTMDP<S>,
+    num_agents: usize,
+    num_tasks: usize,
+    w: &[f32],
+    eps: f32,
+    debug: Debug
+) -> Vec<f32>
+where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
+    let t2 = Instant::now();
+    // Input all of the models into the rayon framework
+    //
+    let enabled_actions = ctmdp.get_enabled_actions();
+    let state_size = ctmdp.get_states().len();
+    let mut pi = choose_random_policy(state_size, enabled_actions);
+
+    let rowblock = ctmdp.states.len() as i32;
+    let pcolblock = rowblock as i32;
+    let rcolblock = (num_agents + num_tasks) as i32;
+    let initP = 
+        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, 
+                &ctmdp.adjusted_state_act_pair);
+    let initR = 
+        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, 
+                &ctmdp.adjusted_state_act_pair);
+
+    println!("init P shape: {:?}", initP.shape());
+
+    let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
+    let mut x: Vec<f32> = vec![0.; initP.shape().1];
+    let mut y: Vec<f32> = vec![0.; initP.shape().0];
+
+    let wagent = vec![1.; num_agents]; 
+    let wtask = vec![0.; num_tasks];
+    let winit = [&wagent[..], &wtask[..]].concat();
+    
+    initial_policy(initP.view(), initR.view(), &winit, eps, 
+                   &mut r_v, &mut x, &mut y);
+
+    //println!("init x: {:?}", x);
+
+    // taking the initial policy and the value vector for the initial policy
+    // what is the optimal policy
+    let mut r_v: Vec<f32> = vec![0.; ctmdp.R.shape().0];
+    let mut y: Vec<f32> = vec![0.; ctmdp.P.shape().0];
+    optimal_policy(ctmdp.P.view(), ctmdp.R.view(), &w, eps, 
+        &mut r_v, &mut x, &mut y, &mut pi, 
+        &ctmdp.enabled_actions, &ctmdp.adjusted_state_act_pair,
+        *ctmdp.state_map.get(&ctmdp.initial_state).unwrap()
+    );
+    
+    match debug {
+        Debug::None => { }
+        _ => {
+            println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
+        }
+    }
+
+    let rowblock = ctmdp.states.len() as i32;
+    let pcolblock = rowblock as i32;
+    let rcolblock = (num_agents + num_tasks) as i32;
+    let argmaxP = 
+        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, &ctmdp.adjusted_state_act_pair);
+    let argmaxR = 
+        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, &ctmdp.adjusted_state_act_pair);
+    let init = *ctmdp.state_map.get(&ctmdp.initial_state).unwrap();
+    //println!("R: \n{:?}", argmaxR.to_dense());
+    let nobjs = num_agents + num_tasks;
+    let r = optimal_values(argmaxP.view(), argmaxR.view(), eps, nobjs);
+    //println!("r: {:?}", r);
+    let mut returns = vec![0.; nobjs];
+    for k in 0..nobjs {
+        returns[k] = r[k * argmaxP.shape().0 + init];
+        //println!("Objective: {}\n{:.2?}", k, &r[k * argmaxP.shape().0..(k + 1) * argmaxP.shape().0])
+    }
+    match debug {
+        Debug::None => { }
+        _ => {
+            println!("Time to do stage 1 + 2 {}", t2.elapsed().as_secs_f32());
+        }
+    }
+    returns
+}
+
+pub fn ctmdp_gpu_solver<S>(
+    ctmdp: &CTMDP<S>,
+    num_agents: usize,
+    num_tasks: usize,
+    w: &[f32],
+    eps: f32,
+    debug: Debug
+) -> Vec<f32>
+where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
+    let t2 = Instant::now();
+    // Input all of the models into the rayon framework
+    //
+    let enabled_actions = ctmdp.get_enabled_actions();
+    let state_size = ctmdp.get_states().len();
+    let mut pi = choose_random_policy(state_size, enabled_actions);
+
+    let rowblock = ctmdp.states.len() as i32;
+    let pcolblock = rowblock as i32;
+    let rcolblock = (num_agents + num_tasks) as i32;
+    let initP = 
+        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, 
+                &ctmdp.adjusted_state_act_pair);
+    let initR = 
+        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, 
+                &ctmdp.adjusted_state_act_pair);
+
+    let wagent = vec![1.; num_agents]; 
+    let wtask = vec![0.; num_tasks];
+    let winit = [&wagent[..], &wtask[..]].concat();
+
+    println!("init P shape: {:?}", initP.shape());
+
+    let mut r_v_init: Vec<f32> = vec![0.; initR.shape().0 as usize];
+    let mut x_init: Vec<f32> = vec![0.; initP.shape().1 as usize];
+    let mut y_init: Vec<f32> = vec![0.; initP.shape().0 as usize];
+    let mut unstable: Vec<i32> = vec![0; initP.shape().0 as usize];
+    let mut stable: Vec<f32> = vec![0.; x_init.len()];
+    let mut y: Vec<f32> = vec![0.; ctmdp.P.shape().0];
+    let mut rmv: Vec<f32> = vec![0.; ctmdp.P.shape().0];
+
+    cuda_initial_policy_value_pinned_graph(
+        initP.view(), 
+        initR.view(), 
+        ctmdp.P.view(), 
+        ctmdp.R.view(), 
+        &winit,
+        &w, 
+        eps, 
+        &mut x_init, 
+        &mut y_init, 
+        &mut r_v_init, 
+        &mut y, 
+        &mut rmv, 
+        &mut unstable, 
+        &mut pi, 
+        &ctmdp.enabled_actions, 
+        &ctmdp.adjusted_state_act_pair,
+        &mut stable,
+    );
+
+    let rowblock = ctmdp.states.len() as i32;
+    let pcolblock = rowblock as i32;
+    let rcolblock = (num_agents + num_tasks) as i32;
+    let argmaxP = 
+        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, &ctmdp.adjusted_state_act_pair);
+    let argmaxR = 
+        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, &ctmdp.adjusted_state_act_pair);
+    let init = *ctmdp.state_map.get(&ctmdp.initial_state).unwrap();
+    //println!("R: \n{:?}", argmaxR.to_dense());
+    let nobjs = num_agents + num_tasks;
+    let r = cuda_multi_obj_solution(argmaxP.view(), argmaxR.view(), eps, nobjs as i32);
+    //println!("r: {:?}", r);
+    let mut returns = vec![0.; nobjs];
+    for k in 0..nobjs {
+        returns[k] = r[k * argmaxP.shape().0 + init];
+        //println!("Objective: {}\n{:.2?}", k, &r[k * argmaxP.shape().0..(k + 1) * argmaxP.shape().0])
+    }
+    match debug {
+        Debug::None => { }
+        _ => {
+            println!("Time to do stage 1 + 2 {}", t2.elapsed().as_secs_f32());
+        }
+    }
     returns
 }
 
@@ -569,6 +745,13 @@ pub fn allocation_fn(
     allocation
 }
 
+fn prism_trans_label(val: i32) -> String {
+    match val {
+        0 => { "a".to_string() }
+        1 => {"b".to_string() }
+        _ => { "b".to_string() }
+    }
+}
 /// Write a PRISM file which represents a Agent x Task pair. 
 pub fn prism_file_generator(
     P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
@@ -576,7 +759,8 @@ pub fn prism_file_generator(
     adjusted_sidx: &[i32],
     enabled_actions: &[i32],
     initial_state: usize,
-    accepting_states: &[usize]
+    accepting_states: &[usize],
+    mapping: &[i32]
 ) -> std::io::Result<()> 
 {
     let mut buffer = File::create("prism_experiment.mn")?;
@@ -592,7 +776,7 @@ pub fn prism_file_generator(
     // model tail
     for r in 0..state_space {
         for a in 0..enabled_actions[r] {
-            write!(buffer, "\t[] x={} -> ", r)?;
+            write!(buffer, "\t[{}] x={} -> ", prism_trans_label(mapping[r]), r)?;
             // write the transition
             let k = (P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize + 1] - 
                 P.indptr().raw_storage()[(adjusted_sidx[r]+ a) as usize]) as usize;
@@ -625,12 +809,252 @@ pub fn prism_file_generator(
     for state in accepting_states.iter() {
         if count == 0 {
             write!(buffer, "{}", state)?;
-        } else if count == accepting_states.len() - 1 {
+        } /*else if count == accepting_states.len() - 1 {
             write!(buffer, " | x={};", state)?;
-        } else { 
+        } */
+        else { 
             write!(buffer, " | x={}", state)?;
         }
         count += 1;
+    }
+    write!(buffer, ";")?;
+    writeln!(buffer)?;
+    writeln!(buffer)?;
+    writeln!(buffer, "rewards")?;
+    writeln!(buffer, "\t[a] true: 0;")?;
+    writeln!(buffer, "\t[b] true: 1;")?;
+    writeln!(buffer, "endrewards")?;
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn prism_explicit_tra_file_generator(
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    state_space: usize,
+    adjusted_sidx: &[i32],
+    enabled_actions: &[i32]
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create("prism.model.tra")?;
+    // document heading
+    writeln!(buffer, "{} {} {}", P.shape().1, P.shape().0, P.nnz())?;
+    // start model description
+    // end model description
+    // model tail
+    for r in 0..state_space {
+        for a in 0..enabled_actions[r] {
+            //write!(buffer, "\t[] x={} -> ", r)?;
+            // write the transition
+            let k = (P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize + 1] - 
+                P.indptr().raw_storage()[(adjusted_sidx[r]+ a) as usize]) as usize;
+            if k > 0 {
+                for j in 0..k {
+                    let c = P.indices()[P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j];
+                    let p = P.data()[
+                        P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j
+                    ];
+                    writeln!(buffer, "{} {} {} {}", r, a, c, p)?;
+                }
+                //write!(buffer, "\n")?;
+            }
+        }
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn prism_explicit_staterew_file_generator(
+    r: &[f32],
+    state_space: usize,
+    adjusted_sidx: &[i32]
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create("prism.model.rew")?;
+    // document heading
+    let nnz = r.iter().filter(|x| **x > 0.).count();
+    writeln!(buffer, "{} {}", state_space, nnz)?;
+    // start model description
+    // end model description
+    // model tail
+    for ii in 0..state_space {
+        if r[adjusted_sidx[ii] as usize] != 0. {
+            writeln!(buffer, "{} {}", ii , -r[adjusted_sidx[ii] as usize])?;
+            //println!("{} {}", ii, -r[adjusted_sidx[ii] as usize]);
+        }
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn prism_explicit_transrew_file_generator(
+    state_space: usize,
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    enabled_actions: &[i32],
+    adjusted_sidx: &[i32],
+    rewards: &[f32],
+) -> std::io::Result<()> {
+    let mut buffer = File::create("prism.model.trans.rew")?;
+    // document heading
+    writeln!(buffer, "{} {} {}", P.shape().1, P.shape().0, P.nnz())?;
+    // start model description
+    // end model description
+    // model tail
+    for r in 0..state_space {
+        for a in 0..enabled_actions[r] {
+            //write!(buffer, "\t[] x={} -> ", r)?;
+            // write the transition
+            let k = (P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize + 1] - 
+                P.indptr().raw_storage()[(adjusted_sidx[r]+ a) as usize]) as usize;
+            if k > 0 {
+                for j in 0..k {
+                    let c = P.indices()[P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j];
+                    let rew = rewards[(adjusted_sidx[r] + a) as usize];
+                    writeln!(buffer, "{} {} {} {}", r, a, c, rew)?;
+                }
+                //write!(buffer, "\n")?;
+            }
+        }
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn prism_explicit_label_file_generator(
+    init_state: usize,
+    acc: &[usize]
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create("prism.model.lab")?;
+    // document heading
+    writeln!(buffer, "0=\"init\" 1=\"done\"")?;
+    // start model description
+    // end model description
+    // model tail
+    writeln!(buffer, "{}: 0", init_state)?;
+    for k in acc.iter() {
+        writeln!(buffer, "{}: 1", *k)?;
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn choose_random_policy(state_size: usize, enabled_actions: &[i32]) -> Vec<i32> {
+    let mut pi: Vec<i32> = vec![-1; state_size];
+    let mut rng = rand::thread_rng();
+    for s in 0..state_size {
+        let rand_act = rng
+            .gen_range(0..enabled_actions[s]);
+        pi[s] = rand_act;
+    }
+    pi
+}
+
+pub fn storm_explicit_tra_file_generator(
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    state_space: usize,
+    adjusted_sidx: &[i32],
+    enabled_actions: &[i32],
+    name: &str
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create(name)?;
+    // document heading
+    //writeln!(buffer, "{} {} {}", P.shape().1, P.shape().0, P.nnz())?;
+    writeln!(buffer, "mdp")?;
+    // start model description
+    // end model description
+    // model tail
+    for r in 0..state_space {
+        for a in 0..enabled_actions[r] {
+            //write!(buffer, "\t[] x={} -> ", r)?;
+            // write the transition
+            let k = (P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize + 1] - 
+                P.indptr().raw_storage()[(adjusted_sidx[r]+ a) as usize]) as usize;
+            if k > 0 {
+                for j in 0..k {
+                    let c = P.indices()[P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j];
+                    let p = P.data()[
+                        P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j
+                    ];
+                    writeln!(buffer, "{} {} {} {}", r, a, c, p)?;
+                }
+                //write!(buffer, "\n")?;
+            }
+        }
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn storm_explicit_staterew_file_generator(
+    r: &[f32],
+    state_space: usize,
+    adjusted_sidx: &[i32],
+    name: &str
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create(name)?;
+    // document heading
+    //let nnz = r.iter().filter(|x| **x > 0.).count();
+    //writeln!(buffer, "{} {}", state_space, nnz)?;
+    // start model description
+    // end model description
+    // model tail
+    for ii in 0..state_space {
+        if r[adjusted_sidx[ii] as usize] != 0. {
+            writeln!(buffer, "{} {}", ii , -r[adjusted_sidx[ii] as usize])?;
+            //println!("{} {}", ii, -r[adjusted_sidx[ii] as usize]);
+        }
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn storm_explicit_label_file_generator(
+    init_state: usize,
+    acc: &[usize]
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create("storm.w.lab")?;
+    // document heading
+    writeln!(buffer, "#DECLARATION")?;
+    writeln!(buffer, "init done0")?;
+    writeln!(buffer, "#END")?;
+    // start model description
+    // end model description
+    // model tail
+    writeln!(buffer, "{} init", init_state)?;
+    for k in acc.iter() {
+        writeln!(buffer, "{} done0", *k)?;
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn storm_ctmdp_explicit_label_file_generator(
+    init_state: usize,
+    acc: &HashMap<i32, Vec<usize>>,
+    num_tasks: usize,
+    name: &str
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create(name)?;
+    // document heading
+    writeln!(buffer, "#DECLARATION")?;
+    write!(buffer, "init ")?;
+    for k in 0..num_tasks {
+        write!(buffer, "done{} ", k)?;
+    }
+    writeln!(buffer)?;
+    writeln!(buffer, "#END")?;
+    // start model description
+    // end model description
+    // model tail
+    writeln!(buffer, "{} init", init_state)?;
+    for task in 0..num_tasks {
+        for done in acc.get(&(task as i32)).unwrap().iter() {
+            writeln!(buffer, "{} done{}", *done, task)?;
+        }
     }
     buffer.flush()?;
     Ok(())
@@ -729,10 +1153,14 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_warehouse_CPU_only, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_GPU_no_stream, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_gpu_only, m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_single_CPU, m)?)?;
     m.add_function(wrap_pyfunction!(msg_test_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(test_make_prism_file, m)?)?;
     m.add_function(wrap_pyfunction!(warehouse_make_prism_file, m)?)?;
+    m.add_function(wrap_pyfunction!(test_ctmdp_build, m)?)?; 
+    m.add_function(wrap_pyfunction!(test_warehouse_ctmdp, m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_ctmdp_gpu, m)?)?;
     Ok(())
 }
 

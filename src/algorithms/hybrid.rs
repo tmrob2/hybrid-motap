@@ -1,8 +1,9 @@
 //use crate::model::scpm::SCPM;
 //use crate::agent::env::Env;
-use crate::{cuda_initial_policy_value_pinned_graph, cuda_multi_obj_solution, Debug};
+use crate::{cuda_initial_policy_value_pinned_graph, cuda_multi_obj_solution, Debug, choose_random_policy};
 use crate::sparse::argmax::argmaxM;
-use crate::model::momdp::{MOProductMDP, choose_random_policy};
+use crate::model::momdp::MOProductMDP;
+use crate::model::general::ModelFns;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::thread;
 use std::time::Instant;
@@ -81,7 +82,10 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                         CtrlMsg::Data(pmdp) => { 
 
                             // TODO we need to store the current sum of modified stat space size
-                            let mut pi = choose_random_policy(&pmdp);
+                            let state_size = pmdp.get_states().len();
+                            let enabled_actions = pmdp.get_enabled_actions();
+                            let mut pi = choose_random_policy(state_size, enabled_actions);
+
                             let rowblock = pmdp.states.len() as i32;
                             let pcolblock = rowblock as i32;
                             let rcolblock = (num_agents + num_tasks) as i32;
@@ -171,7 +175,9 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
 
                             let output: Vec<(MOProductMDP<S>, Vec<i32>, f32)> = model_ls.into_par_iter().map(|pmdp| {
 
-                                let mut pi = choose_random_policy(&pmdp);
+                                let state_size = pmdp.get_states().len();
+                                let enabled_actions = pmdp.get_enabled_actions();
+                                let mut pi = choose_random_policy(state_size, enabled_actions);
 
                                 let rowblock = pmdp.states.len() as i32;
                                 let pcolblock = rowblock as i32;

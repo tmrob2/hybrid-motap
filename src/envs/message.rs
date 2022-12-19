@@ -3,15 +3,22 @@ use std::time::Instant;
 //use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use sprs::prod::mul_acc_mat_vec_csr;
 use crate::algorithms::dp::{initial_policy, optimal_policy};
+use crate::model::centralised::CTMDP_bfs;
+use crate::model::general::ModelFns;
 use crate::sparse::argmax::argmaxM;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, debug_level, prism_file_generator};
+    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, 
+    debug_level, prism_file_generator, ctmdp_cpu_solver, 
+    prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, 
+    prism_explicit_label_file_generator, storm_explicit_tra_file_generator, 
+    storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator};
 use crate::agent::env::Env;
-use crate::model::momdp::{product_mdp_bfs, choose_random_policy};
+use crate::model::momdp::product_mdp_bfs;
 use crate::model::scpm::SCPM;
 use crate::model::momdp::MOProductMDP;
-use crate::Debug;
+use crate::{Debug, choose_random_policy};
 
 type State = i32;
 
@@ -120,7 +127,9 @@ where MessageSender: Env<State> {
 #[pyfunction]
 pub fn test_make_prism_file(
     model: &SCPM,
-    env: &MessageSender
+    env: &MessageSender,
+    tra_name: String,
+    rew_name: String
 ) -> ()
 where MessageSender: Env<State> {
     // just want to run an implementation to check a model build outcome
@@ -144,6 +153,54 @@ where MessageSender: Env<State> {
         pmdp.states.len(), 
         &pmdp.adjusted_state_act_pair, 
         &pmdp.enabled_actions, 
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        &acc,
+        &pmdp.qmap
+    ).unwrap();
+
+    prism_explicit_tra_file_generator(
+        pmdp.P.view(), 
+        pmdp.states.len(), 
+        &pmdp.adjusted_state_act_pair, 
+        &pmdp.enabled_actions
+    ).unwrap();
+    let mut rtn = vec![0.; pmdp.R.shape().0];
+    let w = vec![1.0, 0.0];
+    println!("R shape: {:?}", pmdp.R.shape());
+    println!("{:?}", pmdp.R.to_dense());
+    //
+    mul_acc_mat_vec_csr(pmdp.R.view(), &w , &mut rtn);
+    //
+    prism_explicit_staterew_file_generator(
+        &rtn, pmdp.states.len(), &pmdp.adjusted_state_act_pair
+    ).unwrap();
+    //
+    prism_explicit_label_file_generator(
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        &acc
+    ).unwrap();
+    prism_explicit_transrew_file_generator(
+        pmdp.states.len(), 
+        pmdp.P.view(), 
+        &pmdp.enabled_actions, 
+        &pmdp.adjusted_state_act_pair,
+        &rtn
+    ).unwrap();
+
+    storm_explicit_tra_file_generator(
+        pmdp.P.view(), 
+        pmdp.states.len(), 
+        &pmdp.adjusted_state_act_pair, 
+        &pmdp.enabled_actions,
+        &tra_name
+    ).unwrap();
+    storm_explicit_staterew_file_generator(
+        &rtn, 
+        pmdp.states.len(),
+        &pmdp.adjusted_state_act_pair,
+        &rew_name
+    ).unwrap();
+    storm_explicit_label_file_generator(
         *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
         &acc
     ).unwrap();
@@ -172,7 +229,9 @@ where MessageSender: Env<State> {
         &model.actions
     );
     // compute the initial random policy based on the enabled actions
-    let pi = choose_random_policy(&pmdp);
+    let state_size = pmdp.get_states().len();
+    let enabled_actions = pmdp.get_enabled_actions();
+    let pi = choose_random_policy(state_size, enabled_actions);
     println!("Pi: {:?}", pi);
     println!("Rm: {:?}", pmdp.R.shape().0);
     println!("Rn: {:?}", pmdp.R.shape().1);
@@ -235,7 +294,9 @@ where MessageSender: Env<State> {
             &model.actions
         );
 
-        let mut pi = choose_random_policy(&pmdp);
+        let state_size = pmdp.get_states().len();
+        let enabled_actions = pmdp.get_enabled_actions();
+        let mut pi = choose_random_policy(state_size, enabled_actions);
 
         let rowblock = pmdp.states.len() as i32;
         let pcolblock = rowblock as i32;
@@ -302,7 +363,9 @@ where MessageSender: Env<State> {
         &model.actions
     );
 
-    let pi = choose_random_policy(&pmdp);
+    let state_size = pmdp.get_states().len();
+    let enabled_actions = pmdp.get_enabled_actions();
+    let pi = choose_random_policy(state_size, enabled_actions);
 
     let rowblock = pmdp.states.len() as i32;
     let pcolblock = rowblock as i32;
@@ -357,7 +420,9 @@ where MessageSender: Env<State> {
         &model.actions
     );
     // compute the initial random policy based on the enabled actions
-    let mut pi = choose_random_policy(&pmdp);
+    let state_size = pmdp.get_states().len();
+    let enabled_actions = pmdp.get_enabled_actions();
+    let mut pi = choose_random_policy(state_size, enabled_actions);
 
     // construct the matrices under the initial random policy.
     let rowblock = pmdp.states.len() as i32;
@@ -561,4 +626,79 @@ println!(
             println!("result: {:?}", result);
         }
     }
+}
+
+// ---------------------------------------------------------------------
+//                       TEST CTMDP MODEL BUILD
+// ---------------------------------------------------------------------
+#[pyfunction]
+pub fn test_ctmdp_build(
+    model: &SCPM,
+    env: &MessageSender,
+    debug: i32,
+    w: Vec<f32>,
+    eps: f32,
+    tra_name: String,
+    rew_name: String,
+    lab_name: String
+) -> ()
+where MessageSender: Env<State> {
+    // run an implementation to check a CTMDP model build outcome
+    let ct_actions = [0, 1, 2];
+    let base_actions: Vec<i32> = model.actions.iter().map(|a| *a + 3).collect();
+    let total_actions = [&ct_actions[..], &base_actions[..]].concat();
+    let init_agents_states: Vec<State> = (0..model.num_agents)
+        .map(|x| env.get_init_state(x))
+        .collect();
+    let ctmdp = CTMDP_bfs(
+        (env.get_init_state(0),0, 0, Vec::new(), 0), 
+        env, 
+        model.num_agents,  
+        model.num_agents + model.tasks.size, 
+        model,
+        &total_actions[..],
+        &init_agents_states
+    );
+
+    //println!("P: \n{:?}", ctmdp.P.to_dense());
+    //println!("R: \n{:?}", ctmdp.R.to_dense());
+    let dbg = match debug {
+        2 => Debug::Verbose1,
+        1 => Debug::Base,
+        3 => Debug::Verbose2,
+        _ => Debug::None,
+    };
+
+    let r = ctmdp_cpu_solver(
+        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
+    );
+    println!("{:?}", r);
+
+    storm_explicit_tra_file_generator(
+        ctmdp.P.view(), 
+        ctmdp.states.len(), 
+        &ctmdp.adjusted_state_act_pair, 
+        &ctmdp.enabled_actions,
+        &tra_name
+    ).unwrap();
+
+
+    let mut rtn = vec![0.; ctmdp.R.shape().0];
+    let w = vec![1.0, 0.0];
+    mul_acc_mat_vec_csr(ctmdp.R.view(), &w , &mut rtn);
+
+    storm_explicit_staterew_file_generator(
+        &rtn, 
+        ctmdp.states.len(),
+        &ctmdp.adjusted_state_act_pair,
+        &rew_name
+    ).unwrap();
+
+    storm_ctmdp_explicit_label_file_generator(
+        *ctmdp.state_map.get(&ctmdp.initial_state).unwrap(), 
+        &ctmdp.accepting, 
+        model.tasks.size, 
+        &lab_name
+    ).unwrap();
+
 }

@@ -189,3 +189,9 @@ impl Mission {
         self.size = 0;
     }
 }
+
+impl Mission {
+    pub fn get_task_copy(&self, task_idx: usize) -> &DFA {
+        &self.tasks[task_idx]
+    }
+}

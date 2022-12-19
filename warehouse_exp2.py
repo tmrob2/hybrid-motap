@@ -1,14 +1,16 @@
 import hybrid
 import itertools
 import random
+import sys
+import math
 
 random.seed(a=12345, version=2)
 
 #
 # Params
 #
-NUM_TASKS = 10
-NUM_AGENTS = 10
+NUM_TASKS = 20
+NUM_AGENTS = 20
 
 
 # ------------------------------------------------------------------------------
@@ -20,11 +22,17 @@ task_progress = {0: "initial", 1: "in_progress", 2: "success", 3: "fail"}
 # Set the initial agent locations up front
 # We can set the feed points up front as well because they are static
 
-init_agent_positions = [(0, 0), (0, 2), (0, 4), (0, 6), (2, 0), 
-                        (2, 0), (4, 0), (6, 0), (8, 0), (9, 0)]
-#init_agent_positions = [(0,0)]
-size = 12
+size =6
 feedpoints = [(size - 1, size // 2)]
+# construct all the positions on the outside of the grid which is not the feed position
+outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + \
+                [(size - 1, i) for i in range(size) if i not in feedpoints] + \
+                [(i, size - 1) for i in range(size)]
+
+#init_agent_positions = random.sample(outer_square, k=NUM_AGENTS)
+init_agent_positions = random.choices(outer_square, k=NUM_AGENTS)
+#print("init agent positions", init_agent_positions)
+#init_agent_positions = [(0,0)]
 #feedpoints = [(2, 2)]
 print("Feed points", feedpoints)
 
@@ -92,7 +100,8 @@ def warehouse_replenishment_task():
     
     return task
 
-rack_samples = random.sample([*warehouse_api.racks], k=NUM_TASKS)
+#rack_samples = random.sample([*warehouse_api.racks], k=NUM_TASKS)
+rack_samples = random.choices([*warehouse_api.racks], k=NUM_TASKS)
 #rack_samples = [*warehouse_api.racks]
 print("rack samples", rack_samples)
 #warehouse_api.add_task_rack_end(0, rack_samples[0])
@@ -104,8 +113,8 @@ for k in range(NUM_TASKS):
     warehouse_api.add_task_feed(k, feedpoints[0])
 
 mission = hybrid.Mission()
-debug = 3
-NUM_CPUs = 2
+debug = 1
+NUM_CPUs = 46
 dfa = warehouse_replenishment_task()
 for task in range(NUM_TASKS):
     mission.add_task(dfa)
@@ -118,5 +127,7 @@ print("Check sum w = 1", sum(w))
 hybrid.test_warehouse_gpu_only(scpm, warehouse_api, w, eps, debug) 
 
 hybrid.test_warehouse_CPU_only(scpm, warehouse_api, w, eps, debug)
+
+hybrid.test_warehouse_single_CPU(scpm, warehouse_api, w, eps, debug)
 
 hybrid.test_warehouse_hybrid(scpm, warehouse_api, w, eps, NUM_CPUs, debug)
