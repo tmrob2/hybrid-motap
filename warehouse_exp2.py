@@ -9,9 +9,8 @@ random.seed(a=12345, version=2)
 #
 # Params
 #
-NUM_TASKS = 20
-NUM_AGENTS = 20
-
+NUM_TASKS = 5
+NUM_AGENTS = 5
 
 # ------------------------------------------------------------------------------
 # SETUP: Construct the structures for agent to recognise task progress
@@ -22,7 +21,7 @@ task_progress = {0: "initial", 1: "in_progress", 2: "success", 3: "fail"}
 # Set the initial agent locations up front
 # We can set the feed points up front as well because they are static
 
-size =6
+size =12
 feedpoints = [(size - 1, size // 2)]
 # construct all the positions on the outside of the grid which is not the feed position
 outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + \
@@ -31,7 +30,7 @@ outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + 
 
 #init_agent_positions = random.sample(outer_square, k=NUM_AGENTS)
 init_agent_positions = random.choices(outer_square, k=NUM_AGENTS)
-#print("init agent positions", init_agent_positions)
+print("init agent positions", init_agent_positions)
 #init_agent_positions = [(0,0)]
 #feedpoints = [(2, 2)]
 print("Feed points", feedpoints)
@@ -114,7 +113,7 @@ for k in range(NUM_TASKS):
 
 mission = hybrid.Mission()
 debug = 1
-NUM_CPUs = 46
+NUM_CPUs = 4
 dfa = warehouse_replenishment_task()
 for task in range(NUM_TASKS):
     mission.add_task(dfa)
@@ -124,10 +123,11 @@ scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(6)))
 #w = [1. / NUM_TASKS + NUM_AGENTS] * (NUM_TASKS + NUM_AGENTS)
 w = [0.01 / NUM_AGENTS] * NUM_AGENTS + [0.99 / NUM_TASKS] * NUM_TASKS
 print("Check sum w = 1", sum(w))
-hybrid.test_warehouse_gpu_only(scpm, warehouse_api, w, eps, debug) 
-
-hybrid.test_warehouse_CPU_only(scpm, warehouse_api, w, eps, debug)
-
-hybrid.test_warehouse_single_CPU(scpm, warehouse_api, w, eps, debug)
-
-hybrid.test_warehouse_hybrid(scpm, warehouse_api, w, eps, NUM_CPUs, debug)
+#hybrid.test_warehouse_gpu_only(scpm, warehouse_api, w, eps, debug) 
+#hybrid.test_warehouse_CPU_only(scpm, warehouse_api, w, eps, debug)
+#hybrid.test_warehouse_single_CPU(scpm, warehouse_api, w, eps, debug)
+#hybrid.test_warehouse_hybrid(scpm, warehouse_api, w, eps, NUM_CPUs, debug)
+target = [-58.1] * NUM_AGENTS + [0.79] * NUM_TASKS
+#hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, 1e-6, 0.01, 1, "HYBRID", NUM_CPUs)
+hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, 1e-6, 0.01, 2, "CPU", 1)
+#hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, 1e-6, 0.01, 2, "GPU", 1)

@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use sprs::prod::mul_acc_mat_vec_csr;
 use crate::algorithms::dp::{initial_policy, optimal_policy};
+use crate::algorithms::synth::{scheduler_synthesis, HardwareChoice};
 use crate::model::centralised::CTMDP_bfs;
 use crate::model::general::ModelFns;
 use crate::sparse::argmax::argmaxM;
@@ -13,7 +14,7 @@ use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation,
     debug_level, prism_file_generator, ctmdp_cpu_solver, 
     prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, 
     prism_explicit_label_file_generator, storm_explicit_tra_file_generator, 
-    storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator};
+    storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator, ctmdp_gpu_solver};
 use crate::agent::env::Env;
 use crate::model::momdp::product_mdp_bfs;
 use crate::model::scpm::SCPM;
@@ -61,7 +62,6 @@ impl Env<State> for MessageSender {
                 }
             }
             2 => { 
-                // return the transition for state 2
                 match action {
                     0 => {Ok(vec![(3, 0.99, "s".to_string()), (4, 0.01, "e".to_string())])}
                     1 => {Ok(vec![(4, 1.0, "e".to_string())])}
@@ -563,7 +563,7 @@ println!(
             );
         }
     }
-    let result = gpu_only_solver(models_ls, model.num_agents, 
+    let result = gpu_only_solver(&models_ls, model.num_agents, 
                                             model.tasks.size, &w, eps, dbug);
     
     match dbug {
@@ -611,13 +611,13 @@ println!(
         _ => { 
             println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
                 models_ls.len(), t1.elapsed().as_secs_f32(),
-                models_ls.iter().fold(0, |acc, m| acc + m.P.shape().1),
+                models_ls.iter().fold(0, |acc, m| acc + m.states.len()),
                 models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
             );
         }
     }
 
-    let result = cpu_only_solver(models_ls, model.num_agents, 
+    let result = cpu_only_solver(&models_ls, model.num_agents, 
                                             model.tasks.size, &w, eps, dbug);
     match dbug {
         Debug::None => { }
@@ -638,11 +638,17 @@ pub fn test_ctmdp_build(
     debug: i32,
     w: Vec<f32>,
     eps: f32,
-    tra_name: String,
-    rew_name: String,
-    lab_name: String
+    //tra_name: String,
+    //rew_name: String,
+    //lab_name: String
 ) -> ()
 where MessageSender: Env<State> {
+
+println!(
+"--------------------------\n
+         CTMDP TEST        \n
+--------------------------"
+);
     // run an implementation to check a CTMDP model build outcome
     let ct_actions = [0, 1, 2];
     let base_actions: Vec<i32> = model.actions.iter().map(|a| *a + 3).collect();
@@ -660,6 +666,8 @@ where MessageSender: Env<State> {
         &init_agents_states
     );
 
+    println!("|S|: {}", ctmdp.states.len());
+
     //println!("P: \n{:?}", ctmdp.P.to_dense());
     //println!("R: \n{:?}", ctmdp.R.to_dense());
     let dbg = match debug {
@@ -674,7 +682,13 @@ where MessageSender: Env<State> {
     );
     println!("{:?}", r);
 
-    storm_explicit_tra_file_generator(
+    let r = ctmdp_gpu_solver(
+        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
+    );
+
+    println!("{:?}", r);
+
+    /*storm_explicit_tra_file_generator(
         ctmdp.P.view(), 
         ctmdp.states.len(), 
         &ctmdp.adjusted_state_act_pair, 
@@ -701,4 +715,60 @@ where MessageSender: Env<State> {
         &lab_name
     ).unwrap();
 
+    */
+
+}
+
+#[pyfunction]
+pub fn synthesis_test(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>,
+    target: Vec<f32>,
+    epsilon1: f32,
+    epsilon2: f32,
+    debug: i32
+) {
+println!(
+"--------------------------\n
+        SYNTH TEST         \n
+--------------------------"
+);
+    let t1 = Instant::now();
+    let dbug = debug_level(debug);
+    //model.construct_products(&mut mdp);
+    let pairs = 
+        product(0..model.num_agents, 0..model.tasks.size);
+    let models_ls: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
+        let pmdp = product_mdp_bfs(
+            (env.get_init_state(a), 0), 
+            env,
+            &model.tasks.get_task(t), 
+            a as i32, 
+            t as i32, 
+            model.num_agents, 
+            model.num_agents + model.tasks.size,
+            &model.actions
+        );
+        pmdp
+    }).collect(); 
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+                models_ls.len(), t1.elapsed().as_secs_f32(),
+                models_ls.iter().fold(0, |acc, m| acc + m.states.len()),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+            );
+        }
+    }
+
+    let t2 = Instant::now();
+
+    let _X = scheduler_synthesis(
+        models_ls, model.num_agents, model.tasks.size, w, &target, 
+        epsilon1, epsilon2, HardwareChoice::CPU, dbug
+    );
+
+    println!("Synthesis run time: {}", t2.elapsed().as_secs_f32());
 }

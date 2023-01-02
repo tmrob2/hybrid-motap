@@ -154,6 +154,8 @@ pub fn CTMDP_bfs<S, E>(
                         .get(&(s, q, taskid, new_tracking, agentid))
                         .unwrap();
                     // add in the transition to the CxxMatrix
+                    //println!("s: {:?}, @s: {}, q: {}, agent: {}, task: {}, a: {}, sidx':{}. s': {:?}, q': {}, agent': {}, task': {}", 
+                    //        s, row_idx + action as i32, q, agentid, taskid, action, sprime_idx, s, q, agentid, taskid);
                     prows.push(row_idx + current_row); pcols.push(sprime_idx as i32); pvals.push(1.0);
                     largest_row = row_idx + current_row + 1;
                 }
@@ -161,8 +163,9 @@ pub fn CTMDP_bfs<S, E>(
                     // this is equivalent to b2
                     // P(s, q, #, b2, s_{next i'>i}, q, #)
                     // requirement to add a new state
-                    let agents = HashSet::from_iter(0..n_agents as i32);
+                    let agents = HashSet::from_iter(agentid + 1..n_agents as i32);
                     let alloc_agents: HashSet<_> = HashSet::from_iter(tracking.to_vec().into_iter());
+                    //println!("current agent: {}, agents: {:?}, #: {:?}: I \\ #: {:?}", agentid, agents, alloc_agents, agents.difference(&alloc_agents));
                     let next_agent = agents.difference(&alloc_agents).min();
                     //println!("next agent: {:?}", next_agent);
                     if next_agent.is_some() {
@@ -189,10 +192,13 @@ pub fn CTMDP_bfs<S, E>(
                             stack.push_back((s, q, taskid, tracking.clone(), *next_agent.unwrap()));
                             ctmdp.insert_state((s, q, taskid, tracking.clone(), *next_agent.unwrap()));
                         }
+                        //println!("stack:{:?}", stack);
                         let sprime_idx = *ctmdp.state_map
                             .get(&(s, q, taskid, tracking.clone(), *next_agent.unwrap()))
                             .unwrap();
                         // add in the transition to the CxxMatrix
+                        //println!("s: {:?}, @s: {}, q: {}, agent: {}, task: {}, a: {}, sidx':{}. s': {:?}, q': {}, agent': {}, task': {}", 
+                        //    s, row_idx + action as i32, q, agentid, taskid, action, sprime_idx, s, q, *next_agent.unwrap(), taskid);
                         prows.push(row_idx + current_row); pcols.push(sprime_idx as i32); pvals.push(1.0);
                         largest_row = row_idx + current_row + 1;
                     }
@@ -238,6 +244,8 @@ pub fn CTMDP_bfs<S, E>(
                                 )
                                 .unwrap();
                             // add in the transition to the CxxMatrix
+                            //println!("s: {:?}, @s: {}, q: {}, agent: {}, task: {}, a: {}, sidx':{}. s': {:?}, q': {}, agent': {}, task': {}", 
+                            //           s, row_idx + action as i32, q, agentid, taskid, action, sprime_idx,snew_0, qnew_0, *next_agent.unwrap(), taskid + 1);
                             prows.push(row_idx + current_row); pcols.push(sprime_idx as i32); pvals.push(1.0);
                             largest_row = row_idx + current_row + 1;
                         }
@@ -342,6 +350,10 @@ pub fn CTMDP_bfs<S, E>(
     ctmdp.P = pTriMatr.to_csr();
     ctmdp.R = rTriMatr.to_csr();
     ctmdp.accepting = accepting;
+
+    /*for state in ctmdp.states.iter() {
+        println!("{:?}", state);
+    }*/
 
     ctmdp
 }

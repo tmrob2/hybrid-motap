@@ -14,7 +14,7 @@ An epsilon threshold for ending value iteration
 use sprs::{CsMatBase, prod::mul_acc_mat_vec_csr};
 
 const MAX_ITERATIONS: usize = 1000;
-const MAX_UNSTABLE: i32 = 50;
+const MAX_UNSTABLE: i32 = 200;
 
 fn abs_max_diff(
     x: &[f32], y: &mut [f32], 
@@ -65,7 +65,7 @@ fn mo_abs_max_diff(
     eps
 }
 
-fn action_comparison(
+/*fn action_comparison(
     y: &mut [f32],
     enabled_actions: &[i32],
     adj_sidx: &[i32],
@@ -93,7 +93,7 @@ fn action_comparison(
         }
     }
     (policy_stable, max_eps)
-}
+}*/
 
 fn action_comparison2(
     y: &mut [f32],
@@ -178,7 +178,7 @@ pub fn optimal_policy(
     P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the transition matrix CSR fmt
     R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the rewards matrix CSR fmt
     w: &[f32], 
-    epsilon: f32, 
+    _epsilon: f32, 
     r_v: &mut [f32],
     x: &mut [f32], // x is the output from the intial policy evaluation
     y: &mut [f32], // the size of x and y will be different. 
@@ -190,8 +190,8 @@ pub fn optimal_policy(
     let mut _eps = 1.0;
     let mut policy_stable = false;
     //let mut xtmp = vec![0.; x.len()];
-    let mut epsold_ = vec![0.; x.len()];
-    let mut unstable = vec![0; x.len()];
+    //let mut epsold_ = vec![0.; x.len()];
+    //let mut unstable = vec![0; x.len()];
     // First thing is to construct the sparse rewards matrix R.w dot product
     mul_acc_mat_vec_csr(R, w, &mut *r_v);
     //let mut k: usize = 0;
@@ -212,7 +212,7 @@ pub fn optimal_policy(
 
         (policy_stable, _eps) = action_comparison2(y, enabled_actions, adj_sidx, x, pi);
         
-        i = 0;
+        //i = 0;
         /*for x_ in x.iter_mut() {
             *x_ = xtmp[i];
             i += 1;
@@ -259,7 +259,7 @@ pub fn optimal_values(
     }
 
     let mut ii: usize = 0;
-    let mut k_eps = 0.;
+    let mut k_eps;
     let mut eps = 1.0;
     while ii < MAX_ITERATIONS && eps > epsilon && eps != f32::INFINITY {
         eps = 0.;
@@ -277,9 +277,10 @@ pub fn optimal_values(
             for (i, x_) in XStorage[k * m.. (k + 1) *m].iter_mut().enumerate() {
                 *x_ = y[i];
             }
-            /*if k == 7 {
+            /*if k == 0 {
                 println!("\n{:?}", &XStorage[k * m.. (k + 1) *m]);
             }*/
+
             eps = f32::max(k_eps, eps);
             //println!("eps: {}", eps);
         }

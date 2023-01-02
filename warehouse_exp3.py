@@ -7,8 +7,8 @@ random.seed(a=12345, version=2)
 #
 # Params
 #
-NUM_TASKS = 2
-NUM_AGENTS = 2
+NUM_TASKS = 6
+NUM_AGENTS = 6
 
 # ------------------------------------------------------------------------------
 # SETUP: Construct the structures for agent to recognise task progress
@@ -28,6 +28,7 @@ outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + 
                 [(size - 1, i) for i in range(size) if i not in feedpoints] + \
                 [(i, size - 1) for i in range(size)]
 init_agent_positions = random.choices(outer_square, k=NUM_AGENTS)
+print("init positions: ", init_agent_positions)
 
 #feedpoints = [(2, 2)]
 print("Feed points", feedpoints)
@@ -120,6 +121,6 @@ w = [0.01 / NUM_AGENTS] * NUM_AGENTS + [0.99 / NUM_TASKS] * NUM_TASKS
 #w = [0., 1]
 print("Check sum w = 1", sum(w))
 debug = 1
+target = [-13.] * NUM_AGENTS + [0.94] * NUM_TASKS
 
-#hybrid.test_warehouse_ctmdp(scpm, warehouse_api, debug, w, eps)
-hybrid.test_warehouse_ctmdp_gpu(scpm, warehouse_api, debug, w, eps)
+hybrid.test_warehouse_ctmdp(scpm, warehouse_api, w, target, eps, 0.01, 2, "CPU")

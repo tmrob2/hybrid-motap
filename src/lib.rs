@@ -7,6 +7,7 @@ pub mod envs;
 pub mod algorithms;
 pub mod sparse;
 pub mod tests;
+use envs::example::Example;
 use model::centralised::CTMDP;
 use model::general::ModelFns;
 //use envs::{message::MessageSender, warehouse::Warehouse};
@@ -15,10 +16,9 @@ use pyo3::prelude::*;
 use rand::Rng;
 use sprs::CsMatBase;
 use task::dfa::{DFA, Mission};
-use envs::message::*;
+use envs::{message::*, warehouse::*, example::*};
 use hashbrown::HashMap;
 use std::{hash::Hash, time::Instant};
-use envs::warehouse::*;
 use model::momdp::MOProductMDP;
 use rayon::prelude::*;
 use sparse::argmax::argmaxM;
@@ -44,8 +44,9 @@ pub fn hybrid_solver<S>(
     eps: f32,
     CPU_COUNT: usize, 
     debug: Debug
-) -> Vec<f32>
+) -> (Vec<f32>, Vec<MOProductMDP<S>>, f32)
 where S: Copy + Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
+    let t1 = Instant::now();
     let (models, M, Pi) = hybrid_stage1(
         output, num_agents, num_tasks, w.to_vec(), eps, CPU_COUNT, debug
     );
@@ -101,20 +102,20 @@ where S: Copy + Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         num_agents, num_tasks, CPU_COUNT, debug);
     
     //println!("result: {:?}", returns);
-    returns
+    (returns, models, t1.elapsed().as_secs_f32())
 }
 
 pub fn gpu_only_solver<S>(
-    models_ls: Vec<MOProductMDP<S>>,
+    models_ls: &[MOProductMDP<S>],
     num_agents: usize,
     num_tasks: usize,
     w: &[f32],
     eps: f32,
     debug: Debug
-) -> Vec<f32>
+) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     
-
+    
     let mut w_init = vec![0.; num_agents + num_tasks];
     for k in 0..num_agents {
         w_init[k] = 1.;
@@ -229,17 +230,17 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let kt = num_agents + t as usize;
         returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
     }
-    returns
+    (returns, t2.elapsed().as_secs_f32())
 }
 
 pub fn cpu_only_solver<S>(
-    models_ls: Vec<MOProductMDP<S>>,
+    models_ls: &[MOProductMDP<S>],
     num_agents: usize,
     num_tasks: usize,
     w: &[f32],
     eps: f32,
     debug: Debug
-) -> Vec<f32>
+) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let t2 = Instant::now();
     // Input all of the models into the rayon framework
@@ -350,7 +351,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         returns[num_agents + t as usize] += t_prob;
     }
     
-    returns
+    (returns, t2.elapsed().as_secs_f32())
 }
 
 pub fn single_cpu_solver<S>(
@@ -476,8 +477,9 @@ pub fn ctmdp_cpu_solver<S>(
     w: &[f32],
     eps: f32,
     debug: Debug
-) -> Vec<f32>
+) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
+    let elapsed_time: f32;
     let t2 = Instant::now();
     // Input all of the models into the rayon framework
     //
@@ -495,7 +497,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, 
                 &ctmdp.adjusted_state_act_pair);
 
-    println!("init P shape: {:?}", initP.shape());
+    //println!("init P shape: {:?}", initP.shape());
 
     let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
     let mut x: Vec<f32> = vec![0.; initP.shape().1];
@@ -544,13 +546,14 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         returns[k] = r[k * argmaxP.shape().0 + init];
         //println!("Objective: {}\n{:.2?}", k, &r[k * argmaxP.shape().0..(k + 1) * argmaxP.shape().0])
     }
+    elapsed_time = t2.elapsed().as_secs_f32();
     match debug {
         Debug::None => { }
         _ => {
-            println!("Time to do stage 1 + 2 {}", t2.elapsed().as_secs_f32());
+            println!("Time to do stage 1 + 2 {}", elapsed_time);
         }
     }
-    returns
+    (returns, elapsed_time)
 }
 
 pub fn ctmdp_gpu_solver<S>(
@@ -560,8 +563,9 @@ pub fn ctmdp_gpu_solver<S>(
     w: &[f32],
     eps: f32,
     debug: Debug
-) -> Vec<f32>
+) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
+    let elapsed_time: f32;
     let t2 = Instant::now();
     // Input all of the models into the rayon framework
     //
@@ -583,7 +587,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let wtask = vec![0.; num_tasks];
     let winit = [&wagent[..], &wtask[..]].concat();
 
-    println!("init P shape: {:?}", initP.shape());
+    //println!("init P shape: {:?}", initP.shape());
 
     let mut r_v_init: Vec<f32> = vec![0.; initR.shape().0 as usize];
     let mut x_init: Vec<f32> = vec![0.; initP.shape().1 as usize];
@@ -630,13 +634,14 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         returns[k] = r[k * argmaxP.shape().0 + init];
         //println!("Objective: {}\n{:.2?}", k, &r[k * argmaxP.shape().0..(k + 1) * argmaxP.shape().0])
     }
+    elapsed_time = t2.elapsed().as_secs_f32();
     match debug {
         Debug::None => { }
         _ => {
-            println!("Time to do stage 1 + 2 {}", t2.elapsed().as_secs_f32());
+            println!("Time to do stage 1 + 2 {}", elapsed_time);
         }
     }
-    returns
+    (returns, elapsed_time)
 }
 
 /*
@@ -1060,6 +1065,36 @@ pub fn storm_ctmdp_explicit_label_file_generator(
     Ok(())
 }
 
+fn new_target(
+    hullset: Vec<Vec<f32>>, 
+    weights: Vec<Vec<f32>>, 
+    target: Vec<f32>,
+    l: usize,
+    //m: usize,
+    //n: usize,
+    //iteration: usize,
+    //cstep: f64,
+    //pstep: f64
+) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    let new_target_script = include_str!("algorithms/eucl.py");
+    let result: Vec<f32> = Python::with_gil(|py| -> PyResult<Vec<f32>> {
+        let lpnewtarget = PyModule::from_code(py, new_target_script, "", "")?;
+        let lpnewtarget_result = lpnewtarget.getattr("eucl_new_target")?.call1((
+            hullset,
+            weights,
+            target,
+            l,
+            //m,
+            //n,
+            //iteration,
+            //cstep,
+            //pstep
+        ))?.extract()?;
+        Ok(lpnewtarget_result)
+    }).unwrap();
+    Ok(result)
+}
+
 /*
 -------------------------------------------------------------------
 |                     SPARSE MATRIX DEFINITIONS                   |
@@ -1137,6 +1172,7 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<DFA>()?;
     m.add_class::<Mission>()?;
     m.add_class::<MessageSender>()?;
+    m.add_class::<Example>()?;
     m.add_class::<SCPM>()?;
     m.add_class::<Warehouse>()?;
     m.add_function(wrap_pyfunction!(test_build, m)?)?;
@@ -1150,7 +1186,6 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_warehouse_policy_optimisation,m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_model_size, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_gpu_policy_optimisation, m)?)?;
-    m.add_function(wrap_pyfunction!(test_warehouse_CPU_only, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_GPU_no_stream, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_gpu_only, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_single_CPU, m)?)?;
@@ -1160,7 +1195,10 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(warehouse_make_prism_file, m)?)?;
     m.add_function(wrap_pyfunction!(test_ctmdp_build, m)?)?; 
     m.add_function(wrap_pyfunction!(test_warehouse_ctmdp, m)?)?;
-    m.add_function(wrap_pyfunction!(test_warehouse_ctmdp_gpu, m)?)?;
+    m.add_function(wrap_pyfunction!(synthesis_test, m)?)?;
+    m.add_function(wrap_pyfunction!(test_warehouse_dec, m)?)?;
+    m.add_function(wrap_pyfunction!(example_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(ex_synthesis, m)?)?;
     Ok(())
 }
 

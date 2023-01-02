@@ -4,10 +4,11 @@ use array_macro::array;
 use pyo3::exceptions::PyValueError;
 use sprs::prod::mul_acc_mat_vec_csr;
 use crate::agent::env::Env;
+use crate::algorithms::synth::{ctmdp_scheduler_synthesis, HardwareChoice, scheduler_synthesis};
 use crate::model::centralised::CTMDP_bfs;
 use crate::model::general::ModelFns;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator, single_cpu_solver, ctmdp_cpu_solver, prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, prism_explicit_label_file_generator, storm_explicit_tra_file_generator, storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator, ctmdp_gpu_solver};
+    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator, single_cpu_solver, ctmdp_cpu_solver, prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, prism_explicit_label_file_generator, storm_explicit_tra_file_generator, storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator, ctmdp_gpu_solver, warm_up_gpu};
 use crate::sparse::argmax::argmaxM;
 use crate::model::momdp::product_mdp_bfs;
 use crate::model::scpm::SCPM;
@@ -593,20 +594,23 @@ println!(
 }
 
 #[pyfunction]
-pub fn test_warehouse_CPU_only(
+pub fn test_warehouse_dec(
     model: &SCPM,
-    env: &mut Warehouse,
+    env: &Warehouse,
     w: Vec<f32>,
-    eps: f32,
-    debug: i32
+    target: Vec<f32>,
+    epsilon1: f32,
+    epsilon2: f32,
+    debug: i32,
+    hware: String,
+    CPU: usize
     //mut outputs: MDPOutputs
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
-println!(
-"--------------------------\n
-        CPU TEST        \n
---------------------------"
-);
+    println!("--------------------------");
+    println!("       SYNTH TEST: {}", hware);
+    println!("--------------------------");
+
     let t1 = Instant::now();
     let dbug = debug_level(debug);
     match dbug {
@@ -640,15 +644,37 @@ println!(
             );
         }
     }
+
+    let hardware: HardwareChoice = match &*hware {
+        "CPU" => { HardwareChoice::CPU }
+        "GPU" => { 
+            cuda_warm_up_gpu(); 
+            HardwareChoice::GPU 
+        }
+        "HYBRID" => { HardwareChoice::Hybrid(CPU) }
+        _ => { panic!("only CPU | GPU | Hybrid supported"); }
+    };
     let t2 = Instant::now();
-    let _result = cpu_only_solver(
-        models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
+
+    let res = scheduler_synthesis(
+        models_ls, model.num_agents, model.tasks.size, w, &target, 
+        epsilon1, epsilon2, hardware, dbug
     );
+
     match dbug {
         Debug::None => { }
         _ => { 
-            println!("Stage 1 + Stage 2 runtime: {}", t2.elapsed().as_secs_f32());
-            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+            match res {
+                Ok((_, rt, l)) => {
+                    let avg_rt = rt.iter().fold(0., |acc, x| acc + x)/ rt.len() as f32;
+                    println!("Average loop run time: {}", avg_rt);
+                    println!("Number of iterations: {}", l); 
+                    println!("Synthesis total run time: {}", t2.elapsed().as_secs_f32());
+                } 
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                }
+            }
         }
     }
 }
@@ -839,7 +865,7 @@ println!(
     }
     let t2 = Instant::now();
     let _result = gpu_only_solver(
-        models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
+        &models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
     );
     match dbug {
         Debug::None => { }
@@ -902,6 +928,7 @@ println!(
         _ => { 
             println!("Stage 1 + Stage 2 runtime: {}", t2.elapsed().as_secs_f32());
             println!("Total runtime {}", t1.elapsed().as_secs_f32());
+            //println!("r: {:?}", _result);
         }
     }
 }
@@ -991,13 +1018,20 @@ where Warehouse: Env<State> {
 pub fn test_warehouse_ctmdp(
     model: &SCPM,
     env: &Warehouse,
-    debug: i32,
     w: Vec<f32>,
-    eps: f32
-    //tra_name: String,
-    //label_name: String
+    target: Vec<f32>,
+    epsilon1: f32,
+    epsilon2: f32,
+    debug: i32,
+    hware: String
 ) 
 where Warehouse: Env<State> {
+println!(
+"--------------------------\n
+        SYNTH TEST         \n
+--------------------------"
+);
+    cuda_warm_up_gpu();
     let ct_actions = [0, 1, 2];
     let base_actions: Vec<i32> = model.actions.iter()
         .map(|a| *a + 3)
@@ -1016,70 +1050,11 @@ where Warehouse: Env<State> {
         &init_agents_states
     );
 
-    let dbg = match debug {
-        2 => Debug::Verbose1,
-        1 => Debug::Base,
-        3 => Debug::Verbose2,
-        _ => Debug::None,
+    let hw = match &*hware {
+        "GPU" => HardwareChoice::GPU,
+        "CPU" => HardwareChoice::CPU,
+        _ => panic!("Choices are CPU or GPU")
     };
-
-    match dbg {
-        Debug::None => { }
-        _ => { 
-            println!("|S|: {}, |P|: {}", ctmdp.P.shape().1, ctmdp.P.nnz());
-        }
-    }
-
-    let r = ctmdp_cpu_solver(
-        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
-    );
-    println!("{:?}", r);
-
-    /*
-    // construct the explicit transition model
-    storm_explicit_tra_file_generator(
-        ctmdp.P.view(), 
-        ctmdp.states.len(), 
-        &ctmdp.adjusted_state_act_pair, 
-        &ctmdp.enabled_actions,
-        &tra_name
-    ).unwrap();
-
-    storm_ctmdp_explicit_label_file_generator(
-        *ctmdp.state_map.get(&ctmdp.initial_state).unwrap(), 
-        &ctmdp.accepting, 
-        model.tasks.size, 
-        &label_name
-    ).unwrap();
-    */
-}
-
-#[pyfunction]
-pub fn test_warehouse_ctmdp_gpu(
-    model: &SCPM,
-    env: &Warehouse,
-    debug: i32,
-    w: Vec<f32>,
-    eps: f32
-) 
-where Warehouse: Env<State> {
-    let ct_actions = [0, 1, 2];
-    let base_actions: Vec<i32> = model.actions.iter()
-        .map(|a| *a + 3)
-        .collect();
-    let total_actions = [&ct_actions[..], &base_actions[..]].concat();
-    let init_agents_states: Vec<State> = (0..model.num_agents)
-        .map(|ii| env.get_init_state(ii))
-        .collect();
-    let ctmdp = CTMDP_bfs(
-        (env.get_init_state(0), 0, 0, Vec::new(), 0), 
-        env, 
-        model.num_agents, 
-        model.num_agents + model.tasks.size, 
-        model, 
-        &total_actions[..], 
-        &init_agents_states
-    );
 
     let dbg = match debug {
         2 => Debug::Verbose1,
@@ -1095,9 +1070,30 @@ where Warehouse: Env<State> {
         }
     }
 
-    let r = ctmdp_gpu_solver(
-        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
+    let t2 = Instant::now();
+
+    let res = ctmdp_scheduler_synthesis(
+        ctmdp, model.num_agents, model.tasks.size, w, &target, 
+        epsilon1, epsilon2, hw, dbg
     );
-    println!("{:?}", r);
+    //println!("{:?}", r);
+    match dbg {
+        Debug::None => { }
+        _ => { 
+            match res {
+                Ok((_, rt, l)) => {
+                    let avg_rt = rt.iter().fold(0., |acc, x| acc + x)/ rt.len() as f32;
+                    println!("Average loop run time: {}", avg_rt);
+                    println!("Number of iterations: {}", l); 
+                    println!("Synthesis total run time: {}", t2.elapsed().as_secs_f32());
+                } 
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                }
+            }
+            
+        }
+    }
+    
 
 }

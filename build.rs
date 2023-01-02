@@ -20,6 +20,7 @@ fn main() {
     println!("cargo:rustc-link-lib=cudart");
     println!("cargo:rustc-link-lib=dylib=cublas");
     println!("cargo:rustc-link-lib=dylib=cusparse");
+    println!("cargo:rustc-link-lib=dylib=glpk");
 
     //println!("cargo:rustc-link-search=native=/usr/local/lib");
     //println!("cargo:rustc-link-lib=static=blis");

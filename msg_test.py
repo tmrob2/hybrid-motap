@@ -59,7 +59,7 @@ scpm = hybrid.SCPM(mission, 1, list(range(2)))
 #
 #print("A.x \n", A @ x)
 #
-epsilon = 0.0001
+epsilon = 1e-6
 w = [1.0, 0.]
 init_x, init_pi = hybrid.test_initial_policy(scpm, msg_env, w, epsilon)
 print("x:", init_x)
@@ -77,7 +77,7 @@ debug = 1
 w = [0.] * NUM_AGENTS + [1./NUM_TASKS] * NUM_TASKS
 mission = hybrid.Mission()
 for msg in range(NUM_TASKS):
-    dfa = message_sending_task(msg + 1)
+    dfa = message_sending_task(msg + 2)
     mission.add_task(dfa)
 scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
 #hybrid.test_threaded_initial_policy(scpm, msg_env, w, epsilon)
@@ -88,9 +88,18 @@ scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(2)))
 
 #hybrid.msg_test_gpu_stream(scpm, msg_env, w, epsilon, debug)
 
-# hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
+#hybrid.msg_test_cpu(scpm, msg_env, w, epsilon, debug)
 
-hybrid.test_make_prism_file(scpm, msg_env, "model.tra", "model.sta.rew")
+#hybrid.test_make_prism_file(scpm, msg_env, "model.tra", "model.sta.rew")
 
-#hybrid.test_ctmdp_build(scpm, msg_env, debug, w, epsilon, "model.tra", "model.lab")
+#hybrid.test_ctmdp_build(scpm, msg_env, debug, w, epsilon)
+
+t = [-4.0, 0.9]
+#t = [-3.2, -4.5, 0.98, 0.97]
+#t = [-3.2, -4.5, -7., 0.98, 0.97, 0.96]
+#w = [1] + [0] * (NUM_AGENTS + NUM_TASKS - 1)
+#w = [1., 0., 0., 0., 0., 0.]
+#w = [1. / (NUM_AGENTS + NUM_TASKS)] * (NUM_TASKS + NUM_AGENTS)
+w = [0.] * NUM_AGENTS + [1./NUM_TASKS] * NUM_TASKS
+hybrid.synthesis_test(scpm, msg_env, w, t, 1e-6, 1., 2)
 
