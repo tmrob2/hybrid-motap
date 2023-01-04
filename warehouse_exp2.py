@@ -1,16 +1,53 @@
 import hybrid
 import itertools
 import random
-import sys
-import math
+import argparse
+
 
 random.seed(a=12345, version=2)
 
+# ------------------------------------------------------------------------------
+# ARGS: Program args for repeating and controlling experiments
+# ------------------------------------------------------------------------------
+
+parser = argparse.ArgumentParser(description="Test MORAP framework with smart-warehouse.")
+parser.add_argument('--agents', dest='num_agents', default=2, help='the number of agents in MAS', 
+                    required=True, type=int)
+parser.add_argument('--size', dest='size', default=6, help='size of the warehouse 6 | 12', 
+                    required=True, choices=[6, 12], type=int)
+parser.add_argument('--hware', dest='hardware', default='CPU', 
+                    choices=['CPU', 'GPU', 'HYBRID'])
+parser.add_argument('--cpu', dest='num_cpus', default=2, type=int, 
+                    help='The number of cpus to use in hybrid infrastructure')
+parser.add_argument('-d', dest='debug', default=0, type=int, choices=[0, 1, 2, 3])
+parser.add_argument('-e', dest='vi_eps', default=1e-6, type=float, 
+                    help="The threshold for value iteration.")
+parser.add_argument('--eps', dest='synth_eps', default=1e-4, type=float, 
+                    help="The threshold for modell checking synthesis algorithm")
+parser.add_argument('--iter', dest='max_iter', default=1000, type=int,
+                    help='The max number of iterations in VI before loop force terminates')
+parser.add_argument('--unstable', dest='max_unstable', default=30, type=int, 
+                    help='The number of divegent state-values before infinity is recognised')
+parser.add_argument('--clb', dest="clower_bound", default=15., type=float, 
+                    help="The lower bound on the cost selection distribution")
+parser.add_argument('--cub', dest="cupper_bound", default=17., type=float, 
+                    help="The upper bound on the cost selection distribution")
+
+args = parser.parse_args()
 #
 # Params
 #
-NUM_TASKS = 5
-NUM_AGENTS = 5
+NUM_AGENTS = args.num_agents
+NUM_TASKS = NUM_AGENTS
+HARDWARE = args.hardware
+debug = args.debug
+NUM_CPUs = args.num_cpus
+EPSILON1 = args.vi_eps
+EPSILON2 = args.synth_eps
+MAX_ITER = args.max_iter
+MAX_UNSTABLE = args.max_unstable
+LB = args.clower_bound
+UB = args.cupper_bound
 
 # ------------------------------------------------------------------------------
 # SETUP: Construct the structures for agent to recognise task progress
@@ -21,7 +58,7 @@ task_progress = {0: "initial", 1: "in_progress", 2: "success", 3: "fail"}
 # Set the initial agent locations up front
 # We can set the feed points up front as well because they are static
 
-size =12
+size = args.size
 feedpoints = [(size - 1, size // 2)]
 # construct all the positions on the outside of the grid which is not the feed position
 outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + \
@@ -30,6 +67,10 @@ outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + 
 
 #init_agent_positions = random.sample(outer_square, k=NUM_AGENTS)
 init_agent_positions = random.choices(outer_square, k=NUM_AGENTS)
+print("\n")
+print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
+print("        Warehouse Attributes        ")
+print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
 print("init agent positions", init_agent_positions)
 #init_agent_positions = [(0,0)]
 #feedpoints = [(2, 2)]
@@ -112,12 +153,10 @@ for k in range(NUM_TASKS):
     warehouse_api.add_task_feed(k, feedpoints[0])
 
 mission = hybrid.Mission()
-debug = 1
-NUM_CPUs = 4
 dfa = warehouse_replenishment_task()
 for task in range(NUM_TASKS):
     mission.add_task(dfa)
-eps = 0.0001
+
 scpm = hybrid.SCPM(mission, NUM_AGENTS, list(range(6)))
 #w = [0] * NUM_AGENTS + [1. / NUM_TASKS] * NUM_TASKS
 #w = [1. / NUM_TASKS + NUM_AGENTS] * (NUM_TASKS + NUM_AGENTS)
@@ -127,7 +166,8 @@ print("Check sum w = 1", sum(w))
 #hybrid.test_warehouse_CPU_only(scpm, warehouse_api, w, eps, debug)
 #hybrid.test_warehouse_single_CPU(scpm, warehouse_api, w, eps, debug)
 #hybrid.test_warehouse_hybrid(scpm, warehouse_api, w, eps, NUM_CPUs, debug)
-target = [-58.1] * NUM_AGENTS + [0.79] * NUM_TASKS
-#hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, 1e-6, 0.01, 1, "HYBRID", NUM_CPUs)
-hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, 1e-6, 0.01, 2, "CPU", 1)
-#hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, 1e-6, 0.01, 2, "GPU", 1)
+target = [-random.uniform(LB, UB)] * NUM_AGENTS + [0.79] * NUM_TASKS
+
+# Run decentralised model building and synthesis
+hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, EPSILON1, EPSILON2, debug, 
+                          HARDWARE, NUM_CPUs, MAX_ITER, MAX_UNSTABLE)

@@ -7,9 +7,9 @@
 
 // BLAS Tests are currently commented out. Will need to uncomment and
 // load cblas/blis src in Cargo.toml file
-use crossbeam_channel::unbounded;
-use threadpool::ThreadPool;
-use std::sync::mpsc::channel;
+//use crossbeam_channel::unbounded;
+//use threadpool::ThreadPool;
+//use std::sync::mpsc::channel;
 //use cblas_sys::{cblas_dgemm, CBLAS_LAYOUT, CBLAS_TRANSPOSE};
 use crate::{CxxMatrixf32, ffi_create_csr, ffi_gaxpy, ffi_spfree};
 use sprs::CsMat;
@@ -126,8 +126,6 @@ pub fn test_rayon_threads(num: usize) {
     }).collect();
 }
 
-use std::thread;
-
 /*pub fn test_explicit_threads_size2() {
 
     let TOTAL_SENDS: usize = 100000;
@@ -206,7 +204,7 @@ use std::thread;
     let _v2: Vec<_> = r2.iter().collect();
 }*/
 
-pub fn matrix_mul_test() {
+pub fn matrix_mul_test() -> Result<(), Box<dyn std::error::Error>> {
     /*let (m, n, k) = (2, 4, 3);
     let a = vec![
         1.0, 4.0,
@@ -241,6 +239,8 @@ pub fn matrix_mul_test() {
             [4.0, 2.0]]);
 
     c = b.dot(&a) + c;
+    println!("c: {:?}", c);
+    Ok(())
 
     /*unsafe {
         cblas_dgemm(CBLAS_LAYOUT::CblasColMajor, 
@@ -250,78 +250,6 @@ pub fn matrix_mul_test() {
             b.as_ptr(), k, 1.0, c.as_mut_ptr(), m);
     }*/
 }
-
-pub fn test_explicit_threads_size4() {
-
-    let TOTAL_SENDS: usize = 100000;
-
-    let (s1, r1) = unbounded();
-    let (s2, r2) = unbounded();
-    let (s3, r3) = unbounded();
-    let (s4, r4) = unbounded();
-
-    thread::spawn(move || {
-        for _ in 0..TOTAL_SENDS / 4 {
-            matrix_mul_test();
-            s1.send(1).unwrap();
-        }
-        drop(s1);
-    });
-    
-    thread::spawn(move || {
-        for _ in 0..TOTAL_SENDS / 4 {
-            matrix_mul_test();
-            s2.send(1).unwrap();
-        }
-        drop(s2);
-    });
-
-    thread::spawn(move || {
-        for _ in 0..TOTAL_SENDS / 4 {
-            matrix_mul_test();
-            s3.send(1).unwrap();
-        }
-        drop(s3);
-    });
-
-    thread::spawn(move || {
-        for _ in 0..TOTAL_SENDS / 4 {
-            matrix_mul_test();
-            s4.send(1).unwrap();
-        }
-        drop(s4);
-    });
-
-    // Receive all messages currently in the channel.
-    let _v1: Vec<_> = r1.iter().collect();
-    let _v2: Vec<_> = r2.iter().collect();
-    let _v3: Vec<_> = r3.iter().collect();
-    let _v4: Vec<_> = r4.iter().collect();
-} 
-
-pub fn test_explicit_threads_size8() {
-
-    let TOTAL_SENDS: usize = 1_000_000;
-    let THREADS = 10;
-
-    let (s1, r1) = std::sync::mpsc::channel();
-
-    for _k in 0..THREADS {
-        let s1_ = s1.clone();
-        thread::spawn(move || {
-            for _ in 0..TOTAL_SENDS / THREADS {
-                matrix_mul_test();
-                s1_.send(1).unwrap();
-            }
-        });
-    }
-
-    // Receive all messages currently in the channel.
-    for _ in 0..TOTAL_SENDS {
-        r1.recv().unwrap();
-    }
-
-} 
 
 pub fn csparse_mv() {
 

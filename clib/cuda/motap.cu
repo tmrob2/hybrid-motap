@@ -9,8 +9,8 @@
 #include <thrust/extrema.h>
 #include <thrust/execution_policy.h>
 
-int MAX_ITERATIONS = 1000;
-const int MAX_UNSTABLE = 30;
+//int MAX_ITERATIONS = 1000;
+//const int MAX_UNSTABLE = 30;
 /*
 #######################################################################
 #                           KERNELS                                   #
@@ -54,7 +54,7 @@ __global__ void max_value(
     }
 }
 
-__global__ void abs_diff(float *a, float *b, float *c, int *unstable, int m) {
+__global__ void abs_diff(float *a, float *b, float *c, int *unstable, int m, int max_unstable) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x; // HANDLE THE DATA AT THIS INDEX
     if (tid < m) {
         // compute the absolute diff between two elems
@@ -64,14 +64,14 @@ __global__ void abs_diff(float *a, float *b, float *c, int *unstable, int m) {
             unstable[tid]++;
         }
         c[tid] = fabsf(b[tid] - a[tid]);
-        if (unstable[tid] > MAX_UNSTABLE && a[tid] < 0) {
+        if (unstable[tid] > max_unstable && a[tid] < 0) {
             a[tid] = -INFINITY;
         }
     } 
 }
 
 __global__ void mobj_abs_diff(float *x, float *y, float *eps_capture, int *unstable, 
-    int obj, int N) {
+    int obj, int N, int max_unstable) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid < N) {
         if (fabsf(x[tid] - y[tid]) < eps_capture[obj * N + tid] || y[tid] == 0.) {
@@ -80,7 +80,7 @@ __global__ void mobj_abs_diff(float *x, float *y, float *eps_capture, int *unsta
             unstable[obj * N + tid]++;
         }
         eps_capture[obj * N + tid] = fabs(x[tid] - y[tid]);
-        if (unstable[obj * N + tid] > MAX_UNSTABLE && y[tid] < 0) {
+        if (unstable[obj * N + tid] > max_unstable && y[tid] < 0) {
             y[tid] = -INFINITY;
         }
     }
@@ -98,7 +98,7 @@ __global__ void copy_elems(float *dest, int begin_idx, float *src, int begin_cp,
 }
 
 void copy_elems_launcher(float *dest, int begin_idx, float *src, int begin_cp, int N) {
-    int blockSize;    // The launch configurator returned block size
+    int blockSize = 0;    // The launch configurator returned block size
     int minGridSize;  // The maximum grid size needed to achieve max
                       // maximum occupancy
     int gridSize;     // The grid size needed, based on the input size
@@ -114,7 +114,7 @@ void copy_elems_launcher(float *dest, int begin_idx, float *src, int begin_cp, i
 void max_value_launcher(float *y, int*enabled_actions, int *adj_sidx, float *xnew,
     float *xold, int *pi, float *stable, float epsilon, int N
 ) {
-    int blockSize;    // The launch configurator returned block size
+    int blockSize = 0;    // The launch configurator returned block size
     int minGridSize;  // The maximum grid size needed to achieve max
                       // maximum occupancy
     int gridSize;     // The grid size needed, based on the input size
@@ -129,9 +129,10 @@ void max_value_launcher(float *y, int*enabled_actions, int *adj_sidx, float *xne
     );
 }
 
-void mobj_abs_diff_launcher(float *x, float*y, float *eps_capture, int *unstable, int obj, int N) {
-    int blockSize;    // The launch configurator returned block size
-    int minGridSize;  // The maximum grid size needed to achieve max
+void mobj_abs_diff_launcher(float *x, float*y, float *eps_capture, int *unstable, 
+    int obj, int N, int max_unstable) {
+    int blockSize = 0;    // The launch configurator returned block size
+    int minGridSize = 0;  // The maximum grid size needed to achieve max
                       // maximum occupancy
     int gridSize;     // The grid size needed, based on the input size
 
@@ -140,11 +141,11 @@ void mobj_abs_diff_launcher(float *x, float*y, float *eps_capture, int *unstable
     // Round up according to array size
     gridSize = (N + blockSize - 1) / blockSize;
 
-    mobj_abs_diff<<<gridSize, blockSize>>>(x, y, eps_capture, unstable, obj, N);
+    mobj_abs_diff<<<gridSize, blockSize>>>(x, y, eps_capture, unstable, obj, N, max_unstable);
 }
 
-void abs_diff_launcher(float *a, float *b, float* c, int *unstable, int m) {
-    int blockSize;    // The launch configurator returned block size
+void abs_diff_launcher(float *a, float *b, float* c, int *unstable, int m, int max_unstable) {
+    int blockSize = 0;    // The launch configurator returned block size
     int minGridSize;  // The maximum grid size needed to achieve max
                       // maximum occupancy
     int gridSize;     // The grid size needed, based on the input size
@@ -154,7 +155,7 @@ void abs_diff_launcher(float *a, float *b, float* c, int *unstable, int m) {
     // Round up according to array size
     gridSize = (m + blockSize - 1) / blockSize;
 
-    abs_diff<<<gridSize, blockSize>>>(a, b, c, unstable, m);
+    abs_diff<<<gridSize, blockSize>>>(a, b, c, unstable, m, max_unstable);
 }
 
 /*
@@ -226,7 +227,9 @@ int initial_policy_value(
     float *w,
     float *rmv,
     int *unstable,
-    float eps
+    float eps,
+    int max_iter,
+    int max_unstable
     ) {
     /* 
     Get the COO matrix into sparsescoo fmt
@@ -410,7 +413,7 @@ int initial_policy_value(
     float maxeps;
     maxeps = 0.0f;
 
-    for (int algo_i = 0; algo_i < MAX_ITERATIONS; algo_i ++) {
+    for (int algo_i = 0; algo_i < max_iter; algo_i ++) {
 
         CHECK_CUSPARSE(cusparseSpMV(
             handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
@@ -433,7 +436,7 @@ int initial_policy_value(
         // what is the difference between dY and dX
 
         // EPSILON COMPUTATION
-        abs_diff_launcher(dY, dX, dZ, dUnstable, pm);
+        abs_diff_launcher(dY, dX, dZ, dUnstable, pm, max_unstable);
         //CHECK_CUBLAS(cublasIsamax(blashandle, pm, dZ, 1, &iepsilon));
 
         thrust::device_ptr<float> dev_ptr(dZ);
@@ -506,7 +509,8 @@ int policy_optimisation(
     int block_size,
     const int *enabled_actions,
     const int *adj_sidx,
-    const float *stable
+    const float *stable,
+    int max_iter
 ){
     /*
     This function is the second part of the value iteration implementation
@@ -681,7 +685,7 @@ int policy_optimisation(
         CUSPARSE_MV_ALG_DEFAULT, dBufferR));
     
     // ALGORITHM LOOP - POLICY GENERATION
-    for (int algo_i = 0; algo_i < MAX_ITERATIONS; algo_i ++) {
+    for (int algo_i = 0; algo_i < max_iter; algo_i ++) {
 
         CHECK_CUSPARSE(cusparseSpMV(
             handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
@@ -790,7 +794,9 @@ int policy_value_stream(
     int *enabled_actions,
     int *adj_sidx,
     float *stable,
-    float eps
+    float eps,
+    int max_iter,
+    int max_unstable
     ) {
     /* 
     Get the COO matrix into sparsescoo fmt
@@ -1163,7 +1169,7 @@ int policy_value_stream(
     float maxeps;
     maxeps = 0.0f;
 
-    for (int algo_i = 0; algo_i < MAX_ITERATIONS; algo_i ++) {
+    for (int algo_i = 0; algo_i < max_iter; algo_i ++) {
 
         CHECK_CUSPARSE(cusparseSpMV(
             handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
@@ -1185,7 +1191,7 @@ int policy_value_stream(
         // what is the difference between dY and dX
 
         // EPSILON COMPUTATION
-        abs_diff_launcher(dYinit, dXinit, dZinit, dUnstableInit, p_init_m);
+        abs_diff_launcher(dYinit, dXinit, dZinit, dUnstableInit, p_init_m, max_unstable);
         //CHECK_CUBLAS(cublasIsamax(blashandle, pm, dZ, 1, &iepsilon));
 
         thrust::device_ptr<float> dev_ptr(dZinit);
@@ -1222,7 +1228,7 @@ int policy_value_stream(
     CHECK_CUDA(cudaMalloc(&dBuffer, bufferSize));
 
     // ALGORITHM LOOP - POLICY GENERATION
-    for (int algo_i = 0; algo_i < MAX_ITERATIONS; algo_i ++) {
+    for (int algo_i = 0; algo_i < max_iter; algo_i ++) {
 
         CHECK_CUSPARSE(cusparseSpMV(
             handle, CUSPARSE_OPERATION_NON_TRANSPOSE, 
@@ -1361,7 +1367,9 @@ int multi_obj_solution(
     float *x,
     float *w,
     float *z,
-    int *unstable
+    int *unstable,
+    int max_iter, 
+    int max_unstable
 ) {
     // Setup the framework infrastructure
     cusparseHandle_t handle;
@@ -1528,7 +1536,7 @@ int multi_obj_solution(
     float maxeps;
     maxeps = 0.0f;
 
-    for (int i = 0; i < MAX_ITERATIONS; i++) {
+    for (int i = 0; i < max_iter; i++) {
 
         for (int k = 0; k < nobjs; k++) {
             copy_elems_launcher(dY, 0, dRStorage, k * rm, rm);
@@ -1556,7 +1564,7 @@ int multi_obj_solution(
             }
             printf("\n");
             */
-            mobj_abs_diff_launcher(dX, dY, dZ, dUnstable, k, pm);
+            mobj_abs_diff_launcher(dX, dY, dZ, dUnstable, k, pm, max_unstable);
 
             // copy x <- y
             copy_elems_launcher(dStorage, k * pm, dY, 0, pm);

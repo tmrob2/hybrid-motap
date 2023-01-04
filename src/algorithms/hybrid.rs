@@ -43,7 +43,9 @@ pub fn hybrid_stage1<S>(
     w: Vec<f32>, 
     epsilon: f32,
     CPU_COUNT: usize,
-    debug: crate::Debug
+    debug: crate::Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> (Vec<MOProductMDP<S>>, Vec<i32>, HashMap<(i32, i32), Vec<i32>>)
 where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static, 
       MOProductMDP<S>: Send + Clone {
@@ -128,6 +130,8 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                                 &pmdp.enabled_actions, 
                                 &pmdp.adjusted_state_act_pair,
                                 &mut stable,
+                                max_iter as i32,
+                                max_unstable
                             );
                             let r = x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()];
                             match debug {
@@ -147,9 +151,10 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
             //Err(e) => { println!("Received error: {:?}", e);}
         }
         match debug {
-            Debug::Verbose1 | Debug::Verbose2 | Debug::Base => { 
+            Debug::Verbose1 | Debug::Verbose2 => { 
                 let msg = "GPU controller thread closed successfully";
-                println!("{:?}", msg);                                }
+                println!("{:?}", msg);
+            }
             _ => { }
         }
     });
@@ -194,7 +199,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                                 let mut y: Vec<f32> = vec![0.; initP.shape().0];
                                 
                                 initial_policy(initP.view(), initR.view(), &w, epsilon, 
-                                            &mut r_v, &mut x, &mut y);
+                                            &mut r_v, &mut x, &mut y, max_iter, max_unstable);
 
                                 // taking the initial policy and the value vector for the initial policy
                                 // what is the optimal policy
@@ -203,7 +208,8 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
                                 let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, epsilon, 
                                             &mut r_v, &mut x, &mut y, &mut pi, 
                                             &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
-                                            *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+                                            *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+                                            max_iter
                                             );
                                 (pmdp, pi, r)
                             }).collect();
@@ -216,7 +222,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
             }
         }
         match debug {
-            Debug::Verbose1 | Debug::Verbose2 | Debug::Base => { 
+            Debug::Verbose1 | Debug::Verbose2 => { 
                 let msg = "CPU controller thread closed successfully";
                 println!("{:?}", msg)
             }
@@ -327,10 +333,10 @@ where S: Copy + Clone + std::fmt::Debug + Eq + std::hash::Hash + 'static,
     cpu_thread.join().unwrap();
 
     match debug {
-        Debug::None => { }
-        _ => { 
+        Debug::Verbose1 | Debug::Verbose2  => { 
             println!("Time to do stage 1: {:?}", t1.elapsed().as_secs_f32())
         }
+        _ => { }
     }
 
     (models_return, M, Pi)
@@ -344,7 +350,9 @@ pub fn hybrid_stage2(
     num_agents: usize,
     num_tasks: usize,
     CPU_COUNT: usize,
-    debug: crate::Debug
+    debug: crate::Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> Vec<f32> {
     // First step we need the channels for passing messages between the threads
     let (gpu_s1, gpu_r1): (Sender<MOCtrlMsg>, Receiver<MOCtrlMsg>) = unbounded();
@@ -374,7 +382,9 @@ pub fn hybrid_stage2(
                                 P.view(), 
                                 R.view(), 
                                 epsilon, 
-                                nobjs as i32
+                                nobjs as i32,
+                                max_iter as i32,
+                                max_unstable
                             );
                             // return the data back to the main thread and wait for
                             // more data
@@ -389,11 +399,11 @@ pub fn hybrid_stage2(
             }
         }
         match debug {
-            Debug::None => { }
-            _ => {
+            Debug::Verbose1 | Debug::Verbose2 => {
                 let msg = "GPU controller thread closed successfully";
                 println!("{:?}", msg);
             }
+            _ => { }
         }
     });
 
@@ -413,7 +423,7 @@ pub fn hybrid_stage2(
                             }
                             let output: Vec<(i32, i32, usize, Vec<f32>, usize)> = v.into_par_iter()
                                 .map(|(a, t, P, R, init)| {
-                                let r = optimal_values(P.view(), R.view(), epsilon, nobjs);   
+                                let r = optimal_values(P.view(), R.view(), epsilon, nobjs, max_iter, max_unstable);   
                                 let s = P.shape().0;
                                 (a, t, s, r, init)
                             }).collect();
@@ -426,11 +436,11 @@ pub fn hybrid_stage2(
             }
         }
         match debug {
-            Debug::Base => { }
-            _ => { 
+            Debug::Verbose1 | Debug::Verbose2 => { 
                 let msg = "CPU controller thread closed successfully";
                 println!("{:?}", msg);
             }
+            _ => { }
         }
     });
 
@@ -515,10 +525,10 @@ pub fn hybrid_stage2(
     cpu_thread.join().unwrap();
 
     match debug {
-        Debug::None => { }
-        _ => { 
+        Debug::Verbose1 | Debug::Verbose2 => { 
             println!("Time to do stage 2: {:?}", t1.elapsed().as_secs_f32())
         }
+        _ => { }
     }
     r_
 

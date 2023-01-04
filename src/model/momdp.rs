@@ -23,7 +23,7 @@ pub struct MOProductMDP<S> {
     pub adjusted_state_act_pair: Vec<i32>, 
     pub enabled_actions: Vec<i32>, 
     pub state_map: HashMap<(S, i32), usize>,
-    reverse_state_map: HashMap<usize, (S, i32)>,
+    _reverse_state_map: HashMap<usize, (S, i32)>,
     pub qmap: Vec<i32>
 }
 
@@ -46,7 +46,7 @@ where S: Copy + Eq + Hash {
             adjusted_state_act_pair: Vec::new(),
             enabled_actions: Vec::new(),
             state_map: HashMap::new(),
-            reverse_state_map: HashMap::new(),
+            _reverse_state_map: HashMap::new(),
             qmap: Vec::new()
         }
     }

@@ -1,7 +1,7 @@
 import cvxpy as cp
 import numpy as np
 
-def eucl_new_target(X, W, t, l):
+def eucl_new_target(X, W, t):
     #print("X", X)
     #print("W", W)
     #print("l", l)
@@ -19,6 +19,6 @@ def eucl_new_target(X, W, t, l):
     #print(prob)
     prob.solve()
     print("status", prob.status)
-    print("optimal value", prob.value)
-    print("optimal var", z.value)
+    #print("optimal value", prob.value)
+    #print("optimal var", z.value)
     return z.value

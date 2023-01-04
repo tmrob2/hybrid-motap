@@ -86,7 +86,9 @@ pub fn example_cpu(
     env: &Example,
     w: Vec<f32>,
     eps: f32,
-    debug: i32
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
 ) {
     let dbug = debug_level(debug);
 
@@ -102,7 +104,7 @@ pub fn example_cpu(
     );
 
     let result = cpu_only_solver(&[pmdp], model.num_agents, 
-        model.tasks.size, &w, eps, dbug);
+        model.tasks.size, &w, eps, dbug, max_iter, max_unstable);
     match dbug {
         Debug::None => { }
             _ => { 
@@ -119,7 +121,9 @@ pub fn ex_synthesis(
     target: Vec<f32>,
     epsilon1: f32,
     epsilon2: f32,
-    debug: i32
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
 ) {
 println!(
 "--------------------------\n
@@ -155,7 +159,7 @@ println!(
 
     let res = scheduler_synthesis(
         models_ls, model.num_agents, model.tasks.size, w, &target, 
-        epsilon1, epsilon2, HardwareChoice::CPU, dbug
+        epsilon1, epsilon2, HardwareChoice::CPU, dbug, max_iter, max_unstable
     );
 
     match dbug {

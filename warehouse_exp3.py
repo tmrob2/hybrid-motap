@@ -4,11 +4,42 @@ import random
 
 random.seed(a=12345, version=2)
 
+# ------------------------------------------------------------------------------
+# ARGS: Program args for repeating and controlling experiments
+# ------------------------------------------------------------------------------
+
+parser = argparse.ArgumentParser(description="Test MORAP framework with smart-warehouse.")
+parser.add_argument('--agents', dest='num_agents', default=2, help='the number of agents in MAS', 
+                    required=True, type=int)
+parser.add_argument('--size', dest='size', default=6, help='size of the warehouse 6 | 12', 
+                    required=True, choices=[6, 12], type=int)
+parser.add_argument('--hware', dest='hardware', default='CPU', 
+                    choices=['CPU', 'GPU', 'HYBRID'])
+parser.add_argument('--cpu', dest='num_cpus', default=2, type=int, 
+                    help='The number of cpus to use in hybrid infrastructure')
+parser.add_argument('-d', dest='debug', default=0, type=int, choices=[0, 1, 2, 3])
+parser.add_argument('-e', dest='vi_eps', default=1e-6, type=float, 
+                    help="The threshold for value iteration.")
+parser.add_argument('--eps', dest='synth_eps', default=1e-4, type=float, 
+                    help="The threshold for modell checking synthesis algorithm")
+parser.add_argument('--iter', dest='max_iter', default=1000, type=int,
+                    help='The max number of iterations in VI before loop force terminates')
+parser.add_argument('--unstable', dest='max_unstable', default=30, type=int, 
+                    help='The number of divegent state-values before infinity is recognised')
+
+args = parser.parse_args()
 #
 # Params
 #
-NUM_TASKS = 6
-NUM_AGENTS = 6
+NUM_AGENTS = args.num_agents
+NUM_TASKS = NUM_AGENTS
+HARDWARE = args.hardware
+debug = args.debug
+NUM_CPUs = args.num_cpus
+EPSILON1 = args.vi_eps
+EPSILON2 = args.synth_eps
+MAX_ITER = args.max_iter
+MAX_UNSTABLE = args.max_unstable
 
 # ------------------------------------------------------------------------------
 # SETUP: Construct the structures for agent to recognise task progress
@@ -21,7 +52,7 @@ task_progress = {0: "initial", 1: "in_progress", 2: "success", 3: "fail"}
 
 #init_agent_positions = [(0, 0), (0, 2), (0, 4), (0, 6), (2, 0), 
 #                        (2, 0), (4, 0), (6, 0), (8, 0), (9, 0)]
-size = 6
+size = args.size
 #init_agent_positions = [(0,0)]
 feedpoints = [(size - 1, size // 2)]
 outer_square  = [(0, i) for i in range(size)] + [(i, 0) for i in range(size)] + \
@@ -123,4 +154,4 @@ print("Check sum w = 1", sum(w))
 debug = 1
 target = [-13.] * NUM_AGENTS + [0.94] * NUM_TASKS
 
-hybrid.test_warehouse_ctmdp(scpm, warehouse_api, w, target, eps, 0.01, 2, "CPU")
+hybrid.test_warehouse_ctmdp(scpm, warehouse_api, w, target, EPSILON1, EPSILON2, debug, HARDWARE)

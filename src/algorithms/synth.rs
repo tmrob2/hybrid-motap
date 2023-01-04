@@ -7,7 +7,7 @@ use std::{hash::Hash, time::Instant};
 //use lp_modeler::dsl::*;
 use minilp::{Problem, OptimizationDirection, ComparisonOp};
 
-const MAX_ITERATIONS: usize = 50;
+const MAX_ITERATIONS: usize = 100;
 
 pub enum HardwareChoice {
     Hybrid(usize), 
@@ -24,7 +24,9 @@ pub fn scheduler_synthesis<S>(
     epsilon1: f32, // value iteration threshold
     _epsilon2: f32, // scheduler synthesis threshold,
     cfg: HardwareChoice, // the system configuration for solving the problem
-    dbug: Debug
+    dbug: Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> Result<(HashMap<usize, Vec<f32>>, Vec<f32>, usize), String> 
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     // the first step of the scheduler synthesis is to process the
@@ -83,22 +85,6 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         match W.insert(w_.to_vec()) {
             false => { 
                 println!("target not achievable");
-                // we have to do more here to find a new target
-                let mut weights: Vec<Vec<f32>> = Vec::new();
-                let mut hullset: Vec<Vec<f32>> = Vec::new();
-                let hullpoints = hullset.len();
-                for (tw, tr) in A.iter() {
-                    weights.push(tw.iter().map(|x| x.into_inner()).collect());
-                    hullset.push(tr.to_vec());
-                }
-                match new_target(hullset, weights, target.to_vec(), hullpoints) {
-                    Ok(z) => { 
-                        tdown = z; 
-                        println!("new target: {:?}", tdown);
-                    }
-                    Err(e) => { println!("Err: {:?}", e); return Ok((Phi_, run_times, l)); }
-                };
-
                 update_solution = false;
                 
             }
@@ -109,18 +95,18 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         match cfg {
             HardwareChoice::Hybrid(CPU_COUNT) => { 
                 (r, models_ls, rt) = hybrid_solver(models_ls, num_agents, num_tasks, &w, 
-                    epsilon1, CPU_COUNT, dbug);
+                    epsilon1, CPU_COUNT, dbug, max_iter, max_unstable);
                     run_times.push(rt);
                 }
             HardwareChoice::GPU => { 
                 println!("calling gpu solver");
                 (r, rt) = gpu_only_solver(&models_ls, num_agents, num_tasks, 
-                    &w, epsilon1, dbug);
+                    &w, epsilon1, dbug, max_iter as i32, max_unstable);
                 run_times.push(rt);
             }
             HardwareChoice::CPU => { 
                 (r, rt) = cpu_only_solver(&models_ls, num_agents, 
-                    num_tasks, &w, epsilon1, dbug);
+                    num_tasks, &w, epsilon1, dbug, max_iter, max_unstable);
                 run_times.push(rt);
             }
         };
@@ -144,6 +130,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
             }
             A.insert(w_, r.to_vec());
             Phi_.insert(l, r.to_vec());
+            l += 1;
         }
 
         let c1 = dot(&w, &r);
@@ -151,8 +138,28 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         if c1 < c2 && c2 - c1 > 1e-4 {
             // find a new tdown
             println!("wr: {} < wt: {}", c1, c2);
+            // we have to do more here to find a new target
+            let mut weights: Vec<Vec<f32>> = Vec::new();
+            let mut hullset: Vec<Vec<f32>> = Vec::new();
+            //let hullpoints = hullset.len();
+            for (tw, tr) in A.iter() {
+                weights.push(tw.iter().map(|x| x.into_inner()).collect());
+                hullset.push(tr.to_vec());
+            }
+            match new_target(hullset, weights, target.to_vec()) {
+                Ok(z) => { 
+                    tdown = z; 
+                    match dbug {
+                        Debug::Verbose1 => {
+                            println!("new target: {:?}", tdown);
+                        }
+                        _ => { }
+                    }
+                    
+                }
+                Err(e) => { println!("Err: {:?}", e); return Ok((Phi_, run_times, l)); }
+            };  
         }
-        l += 1;
     }
     Ok((Phi_, run_times, l))
 }
@@ -166,7 +173,9 @@ pub fn ctmdp_scheduler_synthesis<S>(
     epsilon1: f32, // value iteration threshold
     _epsilon2: f32, // scheduler synthesis threshold,
     cfg: HardwareChoice, // the system configuration for solving the problem
-    dbug: Debug
+    dbug: Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> Result<(HashMap<usize, Vec<f32>>, Vec<f32>, usize), String> 
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     // the first step of the scheduler synthesis is to process the
@@ -228,12 +237,12 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
                 // we have to do more here to find a new target
                 let mut weights: Vec<Vec<f32>> = Vec::new();
                 let mut hullset: Vec<Vec<f32>> = Vec::new();
-                let hullpoints = hullset.len();
+                //let hullpoints = hullset.len();
                 for (tw, tr) in A.iter() {
                     weights.push(tw.iter().map(|x| x.into_inner()).collect());
                     hullset.push(tr.to_vec());
                 }
-                match new_target(hullset, weights, target.to_vec(), hullpoints) {
+                match new_target(hullset, weights, target.to_vec()) {
                     Ok(z) => { tdown = z;  }
                     Err(e) => { println!("Err: {:?}", e); return Ok((Phi_, run_times, l)); }
                 };
@@ -251,12 +260,12 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
             }
             HardwareChoice::GPU => { 
                 (r, rt) = ctmdp_gpu_solver(&ctmdp, num_agents, num_tasks, 
-                    &w, epsilon1, dbug);
+                    &w, epsilon1, dbug, max_iter as i32, max_unstable);
                 run_times.push(rt);
             }
             HardwareChoice::CPU => { 
                 (r, rt) = ctmdp_cpu_solver(&ctmdp, num_agents, 
-                    num_tasks, &w, epsilon1, dbug);
+                    num_tasks, &w, epsilon1, dbug, max_iter, max_unstable);
                 run_times.push(rt);
             }
         };
@@ -278,6 +287,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
                 }
                 _ => { }
             }
+            l += 1;
             A.insert(w_, r.to_vec());
             Phi_.insert(l, r.to_vec());
         }
@@ -288,7 +298,6 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
             // find a new tdown
             println!("wr: {} < wt: {}", c1, c2);
         }
-        l += 1;
     }
     //Ok((Phi_, run_times, l))
     Err("Max iter reached. No solution converged.".to_string())

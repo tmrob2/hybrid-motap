@@ -43,12 +43,15 @@ pub fn hybrid_solver<S>(
     w: &[f32],
     eps: f32,
     CPU_COUNT: usize, 
-    debug: Debug
+    debug: Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> (Vec<f32>, Vec<MOProductMDP<S>>, f32)
 where S: Copy + Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let t1 = Instant::now();
     let (models, M, Pi) = hybrid_stage1(
-        output, num_agents, num_tasks, w.to_vec(), eps, CPU_COUNT, debug
+        output, num_agents, num_tasks, w.to_vec(), eps, CPU_COUNT, debug, 
+        max_iter, max_unstable
     );
     let assignment = 
         minimize(&M, num_tasks, num_agents);
@@ -99,7 +102,7 @@ where S: Copy + Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let nobjs = num_agents + num_tasks;
     let returns = hybrid_stage2(
         allocatedArgMax, eps, nobjs, 
-        num_agents, num_tasks, CPU_COUNT, debug);
+        num_agents, num_tasks, CPU_COUNT, debug, max_iter, max_unstable);
     
     //println!("result: {:?}", returns);
     (returns, models, t1.elapsed().as_secs_f32())
@@ -111,7 +114,9 @@ pub fn gpu_only_solver<S>(
     num_tasks: usize,
     w: &[f32],
     eps: f32,
-    debug: Debug
+    debug: Debug,
+    max_iter: i32, 
+    max_unstable: i32
 ) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     
@@ -163,6 +168,8 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
             &pmdp.enabled_actions, 
             &pmdp.adjusted_state_act_pair,
             &mut stable,
+            max_iter, 
+            max_unstable
         );
         
         M[pmdp.task_id as usize * num_agents + pmdp.agent_id as usize] = 
@@ -192,10 +199,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     }
 
     match debug {
-        Debug::None => { }
-        _ => { 
+        Debug::Verbose1 | Debug::Verbose2 => { 
             println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
         }
+        _ => { }
     }
 
     let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
@@ -225,7 +232,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let nobjs = num_agents + num_tasks;
     let mut returns: Vec<f32> = vec![0.; nobjs];
     for (a, t, P, R, init) in allocatedArgMax.into_iter() {
-        let r = cuda_multi_obj_solution(P.view(), R.view(), eps, nobjs as i32);
+        let r = cuda_multi_obj_solution(P.view(), R.view(), eps, nobjs as i32, max_iter, max_unstable);
         returns[a as usize] += r[(a as usize) * P.shape().0 + init];
         let kt = num_agents + t as usize;
         returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
@@ -239,7 +246,9 @@ pub fn cpu_only_solver<S>(
     num_tasks: usize,
     w: &[f32],
     eps: f32,
-    debug: Debug
+    debug: Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let t2 = Instant::now();
@@ -266,7 +275,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let mut y: Vec<f32> = vec![0.; initP.shape().0];
         
         initial_policy(initP.view(), initR.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y);
+                    &mut r_v, &mut x, &mut y, max_iter, max_unstable);
 
         // taking the initial policy and the value vector for the initial policy
         // what is the optimal policy
@@ -275,8 +284,8 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, eps, 
                     &mut r_v, &mut x, &mut y, &mut pi, 
                     &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
-                    *pmdp.state_map.get(&pmdp.initial_state).unwrap()
-                    );
+                    *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+                    max_iter);
         (pmdp.agent_id, pmdp.task_id, pi, r)
     }).collect();
     let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
@@ -316,10 +325,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         ).collect();
     
     match debug {
-        Debug::None => { }
-        _ => {
+        Debug::Verbose1 | Debug::Verbose2 => {
             println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
         }
+        _ => { }
     }
     
     let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
@@ -341,7 +350,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let nobjs = num_agents + num_tasks;
     let mut returns: Vec<f32> = vec![0.; nobjs];
     let ret_ :Vec<(i32, i32, f32, f32)> = allocatedArgMax.into_par_iter().map(|(a, t, P, R, init)| {
-        let r = optimal_values(P.view(), R.view(), eps, nobjs);
+        let r = optimal_values(P.view(), R.view(), eps, nobjs, max_iter, max_unstable);
         let kt = num_agents + t as usize;
         (a, t, r[(a as usize) * P.shape().0 + init], r[kt * P.shape().0 + init])
     }).collect();
@@ -360,7 +369,9 @@ pub fn single_cpu_solver<S>(
     num_tasks: usize,
     w: &[f32],
     eps: f32,
-    debug: Debug
+    debug: Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> Vec<f32>
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let t2 = Instant::now();
@@ -386,7 +397,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let mut y: Vec<f32> = vec![0.; initP.shape().0];
         
         initial_policy(initP.view(), initR.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y);
+                    &mut r_v, &mut x, &mut y, max_iter, max_unstable);
 
         // taking the initial policy and the value vector for the initial policy
         // what is the optimal policy
@@ -395,8 +406,8 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, eps, 
                     &mut r_v, &mut x, &mut y, &mut pi, 
                     &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
-                    *pmdp.state_map.get(&pmdp.initial_state).unwrap()
-                    );
+                    *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+                    max_iter);
         (pmdp.agent_id, pmdp.task_id, pi, r)
     }).collect();
     let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
@@ -436,10 +447,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         ).collect();
     
     match debug {
-        Debug::None => { }
-        _ => {
+        Debug::Verbose1 | Debug::Verbose2 => {
             println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
         }
+        _ => { }
     }
     
     let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
@@ -461,7 +472,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let nobjs = num_agents + num_tasks;
     let mut returns: Vec<f32> = vec![0.; nobjs];
     for (a, t, P, R, init) in allocatedArgMax.into_iter() {
-        let r = optimal_values(P.view(), R.view(), eps, nobjs);
+        let r = optimal_values(P.view(), R.view(), eps, nobjs, max_iter, max_unstable);
         returns[a as usize] += r[(a as usize) * P.shape().0 + init];
         let kt = num_agents + t as usize;
         returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
@@ -476,7 +487,9 @@ pub fn ctmdp_cpu_solver<S>(
     num_tasks: usize,
     w: &[f32],
     eps: f32,
-    debug: Debug
+    debug: Debug,
+    max_iter: usize,
+    max_unstable: i32
 ) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let elapsed_time: f32;
@@ -508,7 +521,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let winit = [&wagent[..], &wtask[..]].concat();
     
     initial_policy(initP.view(), initR.view(), &winit, eps, 
-                   &mut r_v, &mut x, &mut y);
+                   &mut r_v, &mut x, &mut y, max_iter, max_unstable);
 
     //println!("init x: {:?}", x);
 
@@ -519,14 +532,15 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     optimal_policy(ctmdp.P.view(), ctmdp.R.view(), &w, eps, 
         &mut r_v, &mut x, &mut y, &mut pi, 
         &ctmdp.enabled_actions, &ctmdp.adjusted_state_act_pair,
-        *ctmdp.state_map.get(&ctmdp.initial_state).unwrap()
+        *ctmdp.state_map.get(&ctmdp.initial_state).unwrap(),
+        max_iter
     );
     
     match debug {
-        Debug::None => { }
-        _ => {
+        Debug::Verbose1 | Debug::Verbose2 => {
             println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
         }
+        _ => { }
     }
 
     let rowblock = ctmdp.states.len() as i32;
@@ -539,7 +553,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let init = *ctmdp.state_map.get(&ctmdp.initial_state).unwrap();
     //println!("R: \n{:?}", argmaxR.to_dense());
     let nobjs = num_agents + num_tasks;
-    let r = optimal_values(argmaxP.view(), argmaxR.view(), eps, nobjs);
+    let r = optimal_values(argmaxP.view(), argmaxR.view(), eps, nobjs, max_iter, max_unstable);
     //println!("r: {:?}", r);
     let mut returns = vec![0.; nobjs];
     for k in 0..nobjs {
@@ -548,10 +562,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     }
     elapsed_time = t2.elapsed().as_secs_f32();
     match debug {
-        Debug::None => { }
-        _ => {
+        Debug::Verbose1 | Debug::Verbose2 => {
             println!("Time to do stage 1 + 2 {}", elapsed_time);
         }
+        _ => { }
     }
     (returns, elapsed_time)
 }
@@ -562,7 +576,9 @@ pub fn ctmdp_gpu_solver<S>(
     num_tasks: usize,
     w: &[f32],
     eps: f32,
-    debug: Debug
+    debug: Debug,
+    max_iter: i32,
+    max_unstable: i32
 ) -> (Vec<f32>, f32)
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let elapsed_time: f32;
@@ -615,6 +631,8 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         &ctmdp.enabled_actions, 
         &ctmdp.adjusted_state_act_pair,
         &mut stable,
+        max_iter, 
+        max_unstable
     );
 
     let rowblock = ctmdp.states.len() as i32;
@@ -627,7 +645,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let init = *ctmdp.state_map.get(&ctmdp.initial_state).unwrap();
     //println!("R: \n{:?}", argmaxR.to_dense());
     let nobjs = num_agents + num_tasks;
-    let r = cuda_multi_obj_solution(argmaxP.view(), argmaxR.view(), eps, nobjs as i32);
+    let r = cuda_multi_obj_solution(argmaxP.view(), argmaxR.view(), eps, nobjs as i32, max_iter, max_unstable);
     //println!("r: {:?}", r);
     let mut returns = vec![0.; nobjs];
     for k in 0..nobjs {
@@ -636,10 +654,10 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     }
     elapsed_time = t2.elapsed().as_secs_f32();
     match debug {
-        Debug::None => { }
-        _ => {
+        Debug::Verbose1 | Debug::Verbose2 => {
             println!("Time to do stage 1 + 2 {}", elapsed_time);
         }
+        _ => { }
     }
     (returns, elapsed_time)
 }
@@ -1069,7 +1087,7 @@ fn new_target(
     hullset: Vec<Vec<f32>>, 
     weights: Vec<Vec<f32>>, 
     target: Vec<f32>,
-    l: usize,
+    //l: usize,
     //m: usize,
     //n: usize,
     //iteration: usize,
@@ -1083,7 +1101,7 @@ fn new_target(
             hullset,
             weights,
             target,
-            l,
+            //l,
             //m,
             //n,
             //iteration,
@@ -1231,7 +1249,9 @@ extern "C" {
         w: *const f32,
         rmv: *mut f32,
         unstable: *mut i32,
-        eps: f32
+        eps: f32,
+        max_iter: i32, 
+        max_unstable: i32
     );
 
     fn policy_value_stream(
@@ -1275,7 +1295,9 @@ extern "C" {
         enabled_actions: *const i32,
         adj_sidx: *const i32,
         stable: *mut f32,
-        eps: f32
+        eps: f32,
+        max_iter: i32, 
+        max_unstable: i32
     );
 
     fn policy_optimisation(
@@ -1300,7 +1322,8 @@ extern "C" {
         block_size: i32,
         enabled_actions: *const i32,
         adj_sidx: *const i32,
-        stable: *mut f32
+        stable: *mut f32,
+        max_iter: i32
     );
 
     fn multi_obj_solution(
@@ -1323,7 +1346,9 @@ extern "C" {
         x: *mut f32,
         w: *mut f32,
         z: *mut f32,
-        unstable: *mut i32
+        unstable: *mut i32,
+        max_iter: i32, 
+        max_unstable: i32
     );
 }
 
@@ -1341,7 +1366,9 @@ pub fn cuda_initial_policy_value(
     x: &mut [f32],
     y: &mut [f32],
     rmv: &mut [f32],
-    unstable: &mut [i32]
+    unstable: &mut [i32],
+    max_iter: i32, 
+    max_unstable: i32
 ) {
     let (pm, pn) = P.shape();
     let pnz = P.nnz() as i32;
@@ -1368,7 +1395,9 @@ pub fn cuda_initial_policy_value(
             w.as_ptr(), 
             rmv.as_mut_ptr(), 
             unstable.as_mut_ptr(),
-            eps
+            eps,
+            max_iter, 
+            max_unstable
         )
     }
 }
@@ -1391,6 +1420,8 @@ pub fn cuda_initial_policy_value_pinned_graph(
     enabled_actions: &[i32],
     adj_sidx: &[i32],
     stable: &mut [f32],
+    max_iter: i32,
+    max_unstable: i32
 ) {
     // Matrix under initial scheduler
     let (p_init_m, p_init_n) = Pinit.shape();
@@ -1444,7 +1475,9 @@ pub fn cuda_initial_policy_value_pinned_graph(
             enabled_actions.as_ptr(),
             adj_sidx.as_ptr(),
             stable.as_mut_ptr(),
-            eps
+            eps,
+            max_iter, 
+            max_unstable
         )
     }
 
@@ -1463,7 +1496,8 @@ pub fn cuda_policy_optimisation(
     enabled_actions: &[i32],
     adjusted_sidx: &[i32],
     initial_state: usize,
-    stable: &mut [f32]
+    stable: &mut [f32],
+    max_iter: i32
 ) -> f32 {
     let (pm, pn) = P.shape();
     let pnz = P.nnz() as i32;
@@ -1493,7 +1527,8 @@ pub fn cuda_policy_optimisation(
             block_size, 
             enabled_actions.as_ptr(),
             adjusted_sidx.as_ptr(),
-            stable.as_mut_ptr()
+            stable.as_mut_ptr(),
+            max_iter
         );
         x[initial_state]
     }
@@ -1503,7 +1538,9 @@ pub fn cuda_multi_obj_solution(
     P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
     R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
     eps: f32,
-    nobjs: i32
+    nobjs: i32,
+    max_iter: i32,
+    max_unstable: i32
 ) -> Vec<f32>{
     let (p_m, p_n) = P.shape();
     let p_nz = P.nnz() as i32;
@@ -1538,7 +1575,9 @@ pub fn cuda_multi_obj_solution(
             x_.as_mut_ptr(),
             w_.as_mut_ptr(),
             z_.as_mut_ptr(),
-            unstable_.as_mut_ptr()
+            unstable_.as_mut_ptr(),
+            max_iter, 
+            max_unstable
         )
     }
     z

@@ -8,7 +8,7 @@ use crate::algorithms::synth::{ctmdp_scheduler_synthesis, HardwareChoice, schedu
 use crate::model::centralised::CTMDP_bfs;
 use crate::model::general::ModelFns;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator, single_cpu_solver, ctmdp_cpu_solver, prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, prism_explicit_label_file_generator, storm_explicit_tra_file_generator, storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator, ctmdp_gpu_solver, warm_up_gpu};
+    cuda_warm_up_gpu, gpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator, single_cpu_solver, prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, prism_explicit_label_file_generator, storm_explicit_tra_file_generator, storm_explicit_label_file_generator, prism_explicit_transrew_file_generator};
 use crate::sparse::argmax::argmaxM;
 use crate::model::momdp::product_mdp_bfs;
 use crate::model::scpm::SCPM;
@@ -410,7 +410,9 @@ pub fn test_warehouse_policy_optimisation(
     model: &SCPM,
     env: &mut Warehouse,
     w: Vec<f32>,
-    eps: f32
+    eps: f32,
+    max_iter: usize,
+    max_unstable: i32
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
     let t1 = Instant::now();
@@ -461,7 +463,7 @@ println!(
 
     let t2 = Instant::now();
     
-    initial_policy(initP.view(), initR.view(), &w_init, eps, &mut r_v, &mut x, &mut y);
+    initial_policy(initP.view(), initR.view(), &w_init, eps, &mut r_v, &mut x, &mut y, max_iter, max_unstable);
 
     //println!("Build + initial policy: {:?} (s)", t1.elapsed().as_secs_f32());
     println!("initial policy only: {:?} (s)", t2.elapsed().as_secs_f32());
@@ -474,7 +476,8 @@ println!(
     let val = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, eps, 
         &mut r_v, &mut x, &mut y, &mut pi, &pmdp.enabled_actions, 
         &pmdp.adjusted_state_act_pair, 
-        *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+        *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        max_iter
     );
     println!("Optimal policy computation: {:?} (s) = {}", t3.elapsed().as_secs_f32(), val);
 }
@@ -514,7 +517,9 @@ pub fn test_warehouse_gpu_policy_optimisation(
     model: &SCPM,
     env: &mut Warehouse,
     w: Vec<f32>,
-    eps: f32
+    eps: f32,
+    max_iter: i32,
+    max_unstable: i32
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
     // always call warm up first
@@ -568,7 +573,7 @@ println!(
     let t2 = Instant::now();
     
     cuda_initial_policy_value(initP.view(), initR.view(), &w_init, eps, 
-                              &mut r_v, &mut x, &mut y, &mut unstable);
+                              &mut r_v, &mut x, &mut y, &mut unstable, max_iter, max_unstable);
 
     println!("Build + initial policy: {:?} (s)", t1.elapsed().as_secs_f32());
     println!("initial policy only: {:?} (s)", t2.elapsed().as_secs_f32());
@@ -587,7 +592,8 @@ println!(
         &mut gpux, &mut y, &mut r_v, 
         &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair, 
         *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
-        &mut stable
+        &mut stable,
+        max_iter
     );
     println!("Optimal policy computation: {:?} (s) = {}", 
         t3.elapsed().as_secs_f32(), gpuval);
@@ -603,13 +609,15 @@ pub fn test_warehouse_dec(
     epsilon2: f32,
     debug: i32,
     hware: String,
-    CPU: usize
+    CPU: usize,
+    max_iter: usize,
+    max_unstable: i32
     //mut outputs: MDPOutputs
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
-    println!("--------------------------");
-    println!("       SYNTH TEST: {}", hware);
-    println!("--------------------------");
+    println!("------------------------------");
+    println!(" SYNTH TEST: {} W: {}x{} A: {}", hware, env.size, env.size, model.num_agents);
+    println!("------------------------------");
 
     let t1 = Instant::now();
     let dbug = debug_level(debug);
@@ -651,14 +659,17 @@ where Warehouse: Env<State> {
             cuda_warm_up_gpu(); 
             HardwareChoice::GPU 
         }
-        "HYBRID" => { HardwareChoice::Hybrid(CPU) }
+        "HYBRID" => { 
+            cuda_warm_up_gpu(); 
+            HardwareChoice::Hybrid(CPU) 
+        }
         _ => { panic!("only CPU | GPU | Hybrid supported"); }
     };
     let t2 = Instant::now();
 
     let res = scheduler_synthesis(
         models_ls, model.num_agents, model.tasks.size, w, &target, 
-        epsilon1, epsilon2, hardware, dbug
+        epsilon1, epsilon2, hardware, dbug, max_iter, max_unstable
     );
 
     match dbug {
@@ -667,9 +678,9 @@ where Warehouse: Env<State> {
             match res {
                 Ok((_, rt, l)) => {
                     let avg_rt = rt.iter().fold(0., |acc, x| acc + x)/ rt.len() as f32;
-                    println!("Average loop run time: {}", avg_rt);
+                    println!("Model Checking avg. loop run time: {}", avg_rt);
                     println!("Number of iterations: {}", l); 
-                    println!("Synthesis total run time: {}", t2.elapsed().as_secs_f32());
+                    println!("Total run time: {}", t2.elapsed().as_secs_f32());
                 } 
                 Err(e) => {
                     println!("Error: {:?}", e);
@@ -685,7 +696,9 @@ pub fn test_warehouse_single_CPU(
     env: &mut Warehouse,
     w: Vec<f32>,
     eps: f32,
-    debug: i32
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
     //mut outputs: MDPOutputs
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
@@ -729,7 +742,7 @@ println!(
     }
     let t2 = Instant::now();
     let result = single_cpu_solver(
-        models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
+        models_ls, model.num_agents, model.tasks.size, &w, eps, dbug, max_iter, max_unstable
     );
     match dbug {
         Debug::None => { }
@@ -748,6 +761,8 @@ pub fn test_warehouse_GPU_no_stream(
     w: Vec<f32>,
     eps: f32,
     //mut outputs: MDPOutputs
+    max_iter: i32, 
+    max_unstable: i32
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
     let t1 = Instant::now();
@@ -802,7 +817,7 @@ where Warehouse: Env<State> {
         let _t2 = Instant::now();
         
         cuda_initial_policy_value(initP.view(), initR.view(), &w_init, eps, 
-                                &mut r_v, &mut x, &mut y, &mut unstable);
+                                &mut r_v, &mut x, &mut y, &mut unstable, max_iter, max_unstable);
 
         let mut gpux = x.to_vec();
         let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
@@ -813,7 +828,8 @@ where Warehouse: Env<State> {
             &mut gpux, &mut y, &mut r_v, 
             &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair, 
             *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
-            &mut stable
+            &mut stable,
+            max_iter
         );
     }
 
@@ -828,7 +844,9 @@ pub fn test_warehouse_gpu_only(
     env: &Warehouse,
     w: Vec<f32>,
     eps: f32,
-    debug: i32
+    debug: i32,
+    max_iter: i32, 
+    max_unstable: i32
 ) {
 println!(
 "--------------------------\n
@@ -865,7 +883,7 @@ println!(
     }
     let t2 = Instant::now();
     let _result = gpu_only_solver(
-        &models_ls, model.num_agents, model.tasks.size, &w, eps, dbug
+        &models_ls, model.num_agents, model.tasks.size, &w, eps, dbug, max_iter, max_unstable
     );
     match dbug {
         Debug::None => { }
@@ -884,7 +902,9 @@ pub fn test_warehouse_hybrid(
     w: Vec<f32>,
     eps: f32,
     NUM_CPUs: usize, 
-    debug: i32
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
 ) {
 println!(
 "--------------------------\n
@@ -921,7 +941,8 @@ println!(
     }
     let t2 = Instant::now();
     let _result = hybrid_solver(
-        models_ls, model.num_agents, model.tasks.size, &w, eps, NUM_CPUs, dbug
+        models_ls, model.num_agents, model.tasks.size, &w, eps, NUM_CPUs, dbug,
+        max_iter, max_unstable
     );
     match dbug {
         Debug::None => { }
@@ -938,7 +959,7 @@ pub fn warehouse_make_prism_file(
     model: &SCPM,
     env: &Warehouse,
     name: String,
-    rew_name: String
+    _rew_name: String
 ) -> ()
 where Warehouse: Env<State> {
     // just want to run an implementation to check a model build outcome
@@ -1023,7 +1044,9 @@ pub fn test_warehouse_ctmdp(
     epsilon1: f32,
     epsilon2: f32,
     debug: i32,
-    hware: String
+    hware: String,
+    max_iter: usize,
+    max_unstable: i32
 ) 
 where Warehouse: Env<State> {
 println!(
@@ -1074,7 +1097,7 @@ println!(
 
     let res = ctmdp_scheduler_synthesis(
         ctmdp, model.num_agents, model.tasks.size, w, &target, 
-        epsilon1, epsilon2, hw, dbg
+        epsilon1, epsilon2, hw, dbg, max_iter, max_unstable
     );
     //println!("{:?}", r);
     match dbg {

@@ -13,12 +13,13 @@ An epsilon threshold for ending value iteration
 
 use sprs::{CsMatBase, prod::mul_acc_mat_vec_csr};
 
-const MAX_ITERATIONS: usize = 1000;
-const MAX_UNSTABLE: i32 = 200;
-
 fn abs_max_diff(
-    x: &[f32], y: &mut [f32], 
-    epsold_: &mut [f32], unstable: &mut [i32]) -> f32 {
+    x: &[f32], 
+    y: &mut [f32], 
+    epsold_: &mut [f32], 
+    unstable: &mut [i32],
+    max_unstable: i32
+) -> f32 {
     let mut eps = 0.;
     for k in 0..y.len() {
         if (y[k] - x[k]).abs() < epsold_[k] || y[k] == 0. {
@@ -31,7 +32,7 @@ fn abs_max_diff(
             //println!("y: {}, x: {}, k: {}", y[k], x[k], k);
             eps = (y[k] - x[k]).abs();
         }
-        if unstable[k] > MAX_UNSTABLE && y[k] < 0. {
+        if unstable[k] > max_unstable && y[k] < 0. {
             y[k] = -f32::INFINITY;
         } 
     }
@@ -44,7 +45,8 @@ fn mo_abs_max_diff(
     epsold_: &mut [f32], 
     unstable: &mut [i32],
     k: usize,
-    m: usize
+    m: usize,
+    max_unstable: i32
 ) -> f32 {
     let mut eps = 0.;
     for ii in 0..y.len() {
@@ -58,7 +60,7 @@ fn mo_abs_max_diff(
             //println!("y: {}, x: {}, k: {}", y[k], x[k], k);
             eps = (y[ii] - x[ii]).abs();
         }
-        if unstable[k * m + ii] > MAX_UNSTABLE && y[ii] < 0. {
+        if unstable[k * m + ii] > max_unstable && y[ii] < 0. {
             y[ii] = -f32::INFINITY;
         } 
     }
@@ -137,7 +139,9 @@ pub fn initial_policy(
     epsilon: f32, 
     r_v: &mut [f32],
     x: &mut [f32],
-    y: &mut [f32]
+    y: &mut [f32],
+    max_iter: usize,
+    max_unstable: i32
 ) {
     let mut eps: f32 = 1.0;
     // First compute the matrix vector dot product R.w
@@ -149,7 +153,7 @@ pub fn initial_policy(
     let mut k: usize = 0;
     let mut i;
 
-    while k < MAX_ITERATIONS && eps > epsilon && eps != f32::INFINITY {
+    while k < max_iter && eps > epsilon && eps != f32::INFINITY {
 
         // compute the sparse matrix vector dot product of P.x and add it to r_v to
         // i.e. y = r + P.x
@@ -162,7 +166,7 @@ pub fn initial_policy(
         mul_acc_mat_vec_csr(P, &*x, &mut *y);
         
         // check the difference between x and y
-        eps = abs_max_diff(&x, y, &mut epsold_, &mut unstable);
+        eps = abs_max_diff(&x, y, &mut epsold_, &mut unstable, max_unstable);
         
         i = 0;
         for x_ in x.iter_mut() {
@@ -185,7 +189,8 @@ pub fn optimal_policy(
     pi: &mut [i32], // the size of the policy will be equivalent to |x|
     enabled_actions: &[i32],
     adj_sidx: &[i32],
-    initial_state_index: usize
+    initial_state_index: usize,
+    max_iter: usize
 ) -> f32 {
     let mut _eps = 1.0;
     let mut policy_stable = false;
@@ -197,7 +202,7 @@ pub fn optimal_policy(
     //let mut k: usize = 0;
     let mut i: usize;
     let mut num_loops = 0;
-    while !policy_stable && num_loops < MAX_ITERATIONS {
+    while !policy_stable && num_loops < max_iter {
     //while _eps > epsilon && num_loops < MAX_ITERATIONS {
 
         // compute the sparse matrix vector dot product of P.x and add it to r_v to
@@ -229,7 +234,9 @@ pub fn optimal_values(
     P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the transition matrix CSR fmt
     R: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>, // This is a view of the rewards matrix CSR fmt
     epsilon: f32, 
-    nobjs: usize
+    nobjs: usize,
+    max_iter: usize,
+    max_unstable: i32
 ) -> Vec<f32> {
     // transitions
     let m = P.shape().0;
@@ -261,7 +268,7 @@ pub fn optimal_values(
     let mut ii: usize = 0;
     let mut k_eps;
     let mut eps = 1.0;
-    while ii < MAX_ITERATIONS && eps > epsilon && eps != f32::INFINITY {
+    while ii < max_iter && eps > epsilon && eps != f32::INFINITY {
         eps = 0.;
         for k in 0..nobjs {
             for (i, y_) in y.iter_mut().enumerate() {
@@ -273,7 +280,7 @@ pub fn optimal_values(
             mul_acc_mat_vec_csr(P, &*x, &mut *y);
             
             // check the difference between x and y
-            k_eps = mo_abs_max_diff(&x, &mut y, &mut epsold_, &mut unstable, k, m);
+            k_eps = mo_abs_max_diff(&x, &mut y, &mut epsold_, &mut unstable, k, m, max_unstable);
             for (i, x_) in XStorage[k * m.. (k + 1) *m].iter_mut().enumerate() {
                 *x_ = y[i];
             }

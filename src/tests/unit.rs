@@ -1,4 +1,4 @@
-
+#![allow(unused_imports)]
 /*
 -------------------------------------------------------------------
 |                             TESTS                               |
@@ -20,8 +20,8 @@ fn cpcsr_create() -> Result<(), Box<dyn std::error::Error>> {
     let nzmax = 13 + 1;
     let m = 5;
     let n = 5;
-    let x: Vec<f32> = vec![3.0, 2.0, 5.0, 4.0, 1.0];
-    let mut y: Vec<f32> = vec![0., 0., 0., 0., 0.];
+    let _x: Vec<f32> = vec![3.0, 2.0, 5.0, 4.0, 1.0];
+    let mut _y: Vec<f32> = vec![0., 0., 0., 0., 0.];
 
     let M = &CxxMatrixf32 { 
         nzmax, 
@@ -101,7 +101,7 @@ fn spmv() {
 fn test_splib_threads() {
     let pool = ThreadPool::new(2);
     let (tx, rx) = channel();
-    for t1 in 0..10 {
+    for _t1 in 0..10 {
         let tx_ = tx.clone();
         pool.execute(move || {
             println!("TESTING SQUARE MATRIX");

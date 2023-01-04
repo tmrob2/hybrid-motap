@@ -14,7 +14,8 @@ use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation,
     debug_level, prism_file_generator, ctmdp_cpu_solver, 
     prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, 
     prism_explicit_label_file_generator, storm_explicit_tra_file_generator, 
-    storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, storm_ctmdp_explicit_label_file_generator, prism_explicit_transrew_file_generator, ctmdp_gpu_solver};
+    storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, 
+    prism_explicit_transrew_file_generator, ctmdp_gpu_solver};
 use crate::agent::env::Env;
 use crate::model::momdp::product_mdp_bfs;
 use crate::model::scpm::SCPM;
@@ -211,7 +212,9 @@ pub fn test_initial_policy(
     model: &SCPM,
     env: &MessageSender,
     w: Vec<f32>, 
-    epsilon: f32
+    epsilon: f32,
+    max_iter: usize,
+    max_unstable: i32
 ) -> (Vec<f32>, Vec<i32>)
 where MessageSender: Env<State> {
     // First step of the test is to construct an initial random policy
@@ -257,7 +260,8 @@ where MessageSender: Env<State> {
     let mut x: Vec<f32> = vec![0.; initP.shape().1 as usize];
     let mut y: Vec<f32> = vec![0.; initP.shape().0 as usize];
     
-    initial_policy(initP.view(), initR.view(), &w, epsilon, &mut r_v, &mut x, &mut y);
+    initial_policy(initP.view(), initR.view(), &w, epsilon, &mut r_v, &mut x, &mut y, 
+                   max_iter, max_unstable);
 
     (x.to_owned(), pi)
 
@@ -268,7 +272,9 @@ pub fn test_threaded_initial_policy(
     model: &SCPM,
     env: &MessageSender,
     w: Vec<f32>, 
-    epsilon: f32
+    epsilon: f32,
+    max_iter: usize,
+    max_unstable: i32
 ) -> ()
 where MessageSender: Env<State> {
     // First step of the test is to construct an initial random policy
@@ -313,7 +319,7 @@ where MessageSender: Env<State> {
         let mut y: Vec<f32> = vec![0.; initP.shape().0];
         
         initial_policy(initP.view(), initR.view(), &w, epsilon, 
-                       &mut r_v, &mut x, &mut y);
+                       &mut r_v, &mut x, &mut y, max_iter, max_unstable);
 
         // taking the initial policy and the value vector for the initial policy
         // what is the optimal policy
@@ -322,7 +328,8 @@ where MessageSender: Env<State> {
         let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, epsilon, 
                        &mut r_v, &mut x, &mut y, &mut pi, 
                        &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
-                       *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+                       *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+                       max_iter
                     );
         (a, t, r)
     }).collect();
@@ -338,7 +345,9 @@ pub fn test_cuda_initial_policy(
     model: &SCPM,
     env: &MessageSender,
     w: Vec<f32>, 
-    epsilon: f32
+    epsilon: f32,
+    max_iter: i32, 
+    max_unstable: i32
 ) -> ()
 where MessageSender: Env<State> {
     // First step of the test is to construct an initial random policy
@@ -383,7 +392,7 @@ where MessageSender: Env<State> {
     let mut unstable: Vec<i32> = vec![0; initP.shape().0];
     
     cuda_initial_policy_value(initP.view(), initR.view(), &w, epsilon, 
-                              &mut r_v, &mut x, &mut y, &mut unstable);
+                              &mut r_v, &mut x, &mut y, &mut unstable, max_iter, max_unstable);
     println!("x: {:?}", x);
 
     // The allocation function can be worked out at this point. 
@@ -397,7 +406,9 @@ pub fn test_cudacpu_opt_pol(
     model: &SCPM,
     env: &MessageSender,
     w: Vec<f32>, 
-    epsilon: f32
+    epsilon: f32,
+    max_iter: usize,
+    max_unstable: i32
 ) -> ()
 where MessageSender: Env<State> {
     // First step of the test is to construct an initial random policy
@@ -438,7 +449,8 @@ where MessageSender: Env<State> {
     let mut x: Vec<f32> = vec![0.; initP.shape().1 as usize];
     let mut y: Vec<f32> = vec![0.; initP.shape().0 as usize];
     
-    initial_policy(initP.view(), initR.view(), &w_init, epsilon, &mut r_v, &mut x, &mut y);
+    initial_policy(initP.view(), initR.view(), &w_init, epsilon, &mut r_v, &mut x, &mut y, 
+                   max_iter, max_unstable);
 
     let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
     let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
@@ -446,7 +458,8 @@ where MessageSender: Env<State> {
     let t1 = Instant::now();
     let rcpu = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, epsilon, 
         &mut r_v, &mut xcpu, &mut y, &mut pi, &pmdp.enabled_actions, 
-        &pmdp.adjusted_state_act_pair, *pmdp.state_map.get(&pmdp.initial_state).unwrap()
+        &pmdp.adjusted_state_act_pair, *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
+        max_iter
     );
     println!("CPU policy optimisation: {:?} (ns)", t1.elapsed().as_nanos());
     
@@ -458,7 +471,8 @@ where MessageSender: Env<State> {
     let rgpu = cuda_policy_optimisation(pmdp.P.view(), pmdp.R.view(), &w, 
         epsilon, &mut pi, &mut xgpu, &mut y, &mut r_v, &pmdp.enabled_actions, 
         &pmdp.adjusted_state_act_pair, *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
-        &mut stable
+        &mut stable,
+        max_iter as i32
     );
     println!("GPU policy optimisation: {:?} (ns)", t1.elapsed().as_nanos());
 
@@ -472,7 +486,9 @@ pub fn experiment_gpu_cpu_binary_thread(
     w: Vec<f32>, 
     epsilon: f32,
     CPU_COUNT: usize,
-    debug: i32
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
 ) -> ()
 where MessageSender: Env<State> {
 println!(
@@ -507,7 +523,8 @@ println!(
         }
     }
     let results = hybrid_solver(
-        output, model.num_agents, model.tasks.size, &w, epsilon, CPU_COUNT, dbug
+        output, model.num_agents, model.tasks.size, &w, epsilon, CPU_COUNT, dbug,
+        max_iter, max_unstable
     );
     match dbug {
         Debug::None => { }
@@ -527,7 +544,9 @@ pub fn msg_test_gpu_stream(
     env: &MessageSender,
     w: Vec<f32>,
     eps: f32,
-    debug: i32
+    debug: i32,
+    max_iter: i32, 
+    max_unstable: i32
 ) {
 println!(
 "--------------------------\n
@@ -564,7 +583,7 @@ println!(
         }
     }
     let result = gpu_only_solver(&models_ls, model.num_agents, 
-                                            model.tasks.size, &w, eps, dbug);
+                                            model.tasks.size, &w, eps, dbug, max_iter, max_unstable);
     
     match dbug {
         Debug::None => { }
@@ -581,7 +600,9 @@ pub fn msg_test_cpu(
     env: &MessageSender,
     w: Vec<f32>,
     eps: f32,
-    debug: i32
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
 ) {
 println!(
 "--------------------------\n
@@ -618,7 +639,7 @@ println!(
     }
 
     let result = cpu_only_solver(&models_ls, model.num_agents, 
-                                            model.tasks.size, &w, eps, dbug);
+                                            model.tasks.size, &w, eps, dbug, max_iter, max_unstable);
     match dbug {
         Debug::None => { }
         _ => { 
@@ -641,6 +662,8 @@ pub fn test_ctmdp_build(
     //tra_name: String,
     //rew_name: String,
     //lab_name: String
+    max_iter: usize,
+    max_unstable: i32
 ) -> ()
 where MessageSender: Env<State> {
 
@@ -678,12 +701,12 @@ println!(
     };
 
     let r = ctmdp_cpu_solver(
-        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
+        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg, max_iter, max_unstable
     );
     println!("{:?}", r);
 
     let r = ctmdp_gpu_solver(
-        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg
+        &ctmdp, model.num_agents, model.tasks.size, &w[..], eps, dbg, max_iter as i32, max_unstable
     );
 
     println!("{:?}", r);
@@ -727,7 +750,9 @@ pub fn synthesis_test(
     target: Vec<f32>,
     epsilon1: f32,
     epsilon2: f32,
-    debug: i32
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
 ) {
 println!(
 "--------------------------\n
@@ -767,7 +792,7 @@ println!(
 
     let _X = scheduler_synthesis(
         models_ls, model.num_agents, model.tasks.size, w, &target, 
-        epsilon1, epsilon2, HardwareChoice::CPU, dbug
+        epsilon1, epsilon2, HardwareChoice::CPU, dbug, max_iter, max_unstable
     );
 
     println!("Synthesis run time: {}", t2.elapsed().as_secs_f32());
