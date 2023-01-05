@@ -1,15 +1,15 @@
 # Introduction
 
-This repo is in support of the paper 'Multi-Objective Task Assignment and Multiagent Planning with Hybrid GPU-CPU Acceleration'. A long version of this paper can be found in this repo at [paper](GPU_MOTAP_NFM23_LONG).
+This repo is in support of the paper 'Multi-Objective Task Assignment and Multiagent Planning with Hybrid GPU-CPU Acceleration'. A long version of this paper can be found in this repo at [paper](GPU_MOTAP_NFM23_LONG.pdf).
 
 # Installation
 
-Requirements:
+<b>Requirements</b>:
 1. GPU device with compute >=5.0. For best results compute 8.6 and above is preferred. 
 2. To run larger MAS 16Gb RAM is required. 
 3. Linux (Debian Tested, Windows and MACOS not tested). Windows WSL should work correcly if the shared libraries are linked correctly.
 
-Installation Steps:
+Clone this repository and `cd` into it. <b>Installation Steps</b>:
 
 1. Install a python environment `python -m venv path/to/env` and activate.
 2. Install `maturin` with `pip install maturin`
@@ -20,6 +20,7 @@ Installation Steps:
 7. `export CUDA_LIB=/path/to/lib64/` E.g. default CUDA installation `export CUDA_LIB=/usr/local/cuda/lib64/`
 8. A `C` compiler is required e.g. `gcc`
 9. Once the above setup has been successfully completed, running `maturin develop --release` will install the MORAP framework with optimisations, and link all the required shared libraries. 
+10. make the experiment shell script executable `chmod u+x exp.sh`
 
 Note: Steps 4-8 are optional. If the GPU is not configured to use Nvidia, then Hybrid, GPU framework architecture cannot be used. However, CPU parallelism will still work. 
 
