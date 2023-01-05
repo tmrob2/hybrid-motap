@@ -611,7 +611,8 @@ pub fn test_warehouse_dec(
     hware: String,
     CPU: usize,
     max_iter: usize,
-    max_unstable: i32
+    max_unstable: i32,
+    constraint_threshold: Vec<f32>
     //mut outputs: MDPOutputs
 ) -> () //(Vec<f32>, MDPOutputs)
 where Warehouse: Env<State> {
@@ -669,7 +670,7 @@ where Warehouse: Env<State> {
 
     let res = scheduler_synthesis(
         models_ls, model.num_agents, model.tasks.size, w, &target, 
-        epsilon1, epsilon2, hardware, dbug, max_iter, max_unstable
+        epsilon1, epsilon2, hardware, dbug, max_iter, max_unstable, &constraint_threshold
     );
 
     match dbug {
@@ -1046,7 +1047,8 @@ pub fn test_warehouse_ctmdp(
     debug: i32,
     hware: String,
     max_iter: usize,
-    max_unstable: i32
+    max_unstable: i32,
+    constraint_threshold: Vec<f32>
 ) 
 where Warehouse: Env<State> {
 println!(
@@ -1097,7 +1099,8 @@ println!(
 
     let res = ctmdp_scheduler_synthesis(
         ctmdp, model.num_agents, model.tasks.size, w, &target, 
-        epsilon1, epsilon2, hw, dbg, max_iter, max_unstable
+        epsilon1, epsilon2, hw, dbg, max_iter, max_unstable,
+        &constraint_threshold
     );
     //println!("{:?}", r);
     match dbg {

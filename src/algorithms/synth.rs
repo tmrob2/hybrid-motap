@@ -26,7 +26,8 @@ pub fn scheduler_synthesis<S>(
     cfg: HardwareChoice, // the system configuration for solving the problem
     dbug: Debug,
     max_iter: usize,
-    max_unstable: i32
+    max_unstable: i32,
+    constraint_threshold: &[f32]
 ) -> Result<(HashMap<usize, Vec<f32>>, Vec<f32>, usize), String> 
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     // the first step of the scheduler synthesis is to process the
@@ -37,6 +38,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let mut W: HashSet<Vec<OrderedFloat<f32>>> = HashSet::new();
     let mut Phi_: HashMap<usize, Vec<f32>> = HashMap::new();
     let mut A: HashMap<Vec<OrderedFloat<f32>>, Vec<f32>> = HashMap::new();
+    //let largest_target_cost = compute_largest_cost(num_agents, &target[..]);
     // compute w's until we find the same w. 
     
     // find the value of the first w
@@ -48,7 +50,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let mut run_times: Vec<f32> = Vec::new();
     let mut rt: f32;
     let mut distance: f32 = 1.0;
-    
+
     //while compute_eucl_dist(&tup, &tdown) > epsilon2 {
     for _ in 0..MAX_ITERATIONS {
         if !W.is_empty() {
@@ -99,7 +101,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
                     run_times.push(rt);
                 }
             HardwareChoice::GPU => { 
-                println!("calling gpu solver");
+                //println!("calling gpu solver");
                 (r, rt) = gpu_only_solver(&models_ls, num_agents, num_tasks, 
                     &w, epsilon1, dbug, max_iter as i32, max_unstable);
                 run_times.push(rt);
@@ -146,9 +148,16 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
                 weights.push(tw.iter().map(|x| x.into_inner()).collect());
                 hullset.push(tr.to_vec());
             }
-            match new_target(hullset, weights, target.to_vec()) {
+            match dbug {
+                Debug::Verbose1 => {
+                    println!("W: {:?}\nX: {:?}\nt: {:?}\nC: {:?}", 
+                        weights, hullset, target, constraint_threshold);
+                }
+                _ => { }
+            }
+            match new_target(hullset, weights, target.to_vec(), num_agents, constraint_threshold.to_vec()) {
                 Ok(z) => { 
-                    tdown = z; 
+                    tdown = z;
                     match dbug {
                         Debug::Verbose1 => {
                             println!("new target: {:?}", tdown);
@@ -175,7 +184,8 @@ pub fn ctmdp_scheduler_synthesis<S>(
     cfg: HardwareChoice, // the system configuration for solving the problem
     dbug: Debug,
     max_iter: usize,
-    max_unstable: i32
+    max_unstable: i32,
+    constraint_threshold: &[f32]
 ) -> Result<(HashMap<usize, Vec<f32>>, Vec<f32>, usize), String> 
 where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     // the first step of the scheduler synthesis is to process the
@@ -196,8 +206,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
     let mut update_solution: bool; 
     let mut run_times: Vec<f32> = Vec::new();
     let mut rt: f32;
-    let mut distance: f32 = 1.0;
-    
+    let mut distance: f32 = 1.0;    
     //while compute_eucl_dist(&tup, &tdown) > epsilon2 {
     for _ in 0..MAX_ITERATIONS {
         let t1 = Instant::now();
@@ -234,19 +243,6 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         match W.insert(w_.to_vec()) {
             false => { 
                 println!("target not achievable");
-                // we have to do more here to find a new target
-                let mut weights: Vec<Vec<f32>> = Vec::new();
-                let mut hullset: Vec<Vec<f32>> = Vec::new();
-                //let hullpoints = hullset.len();
-                for (tw, tr) in A.iter() {
-                    weights.push(tw.iter().map(|x| x.into_inner()).collect());
-                    hullset.push(tr.to_vec());
-                }
-                match new_target(hullset, weights, target.to_vec()) {
-                    Ok(z) => { tdown = z;  }
-                    Err(e) => { println!("Err: {:?}", e); return Ok((Phi_, run_times, l)); }
-                };
-
                 update_solution = false;
                 
             }
@@ -297,6 +293,18 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
         if c1 < c2 {
             // find a new tdown
             println!("wr: {} < wt: {}", c1, c2);
+            // we have to do more here to find a new target
+            let mut weights: Vec<Vec<f32>> = Vec::new();
+            let mut hullset: Vec<Vec<f32>> = Vec::new();
+            //let hullpoints = hullset.len();
+            for (tw, tr) in A.iter() {
+                weights.push(tw.iter().map(|x| x.into_inner()).collect());
+                hullset.push(tr.to_vec());
+            }
+            match new_target(hullset, weights, target.to_vec(), num_agents, constraint_threshold.to_vec()) {
+                Ok(z) => { tdown = z;  }
+                Err(e) => { println!("Err: {:?}", e); return Ok((Phi_, run_times, l)); }
+            };
         }
     }
     //Ok((Phi_, run_times, l))

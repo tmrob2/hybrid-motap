@@ -1087,6 +1087,8 @@ fn new_target(
     hullset: Vec<Vec<f32>>, 
     weights: Vec<Vec<f32>>, 
     target: Vec<f32>,
+    num_agents: usize,
+    constraint_threshold: Vec<f32>
     //l: usize,
     //m: usize,
     //n: usize,
@@ -1103,7 +1105,8 @@ fn new_target(
             target,
             //l,
             //m,
-            //n,
+            num_agents,
+            constraint_threshold
             //iteration,
             //cstep,
             //pstep

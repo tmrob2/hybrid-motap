@@ -30,5 +30,6 @@ t = [-2.5, 0.7] # achievable
 #t = [-1.8, 0.9] # unachievable
 eps = 0.0001
 w = [1., 0]
+C = [1., 0.]
 hybrid.example_cpu(scpm, ex, w, 1e-6, 1)
-hybrid.ex_synthesis(scpm, ex, w, t, 1e-6, 1e-4, 2) # set verbosity to 2 (last param) to print pareto points
+hybrid.ex_synthesis(scpm, ex, w, t, 1e-6, 1e-4, 2, C) # set verbosity to 2 (last param) to print pareto points

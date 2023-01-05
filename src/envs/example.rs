@@ -123,7 +123,8 @@ pub fn ex_synthesis(
     epsilon2: f32,
     debug: i32,
     max_iter: usize,
-    max_unstable: i32
+    max_unstable: i32,
+    constraint_threshold: Vec<f32>
 ) {
 println!(
 "--------------------------\n
@@ -159,7 +160,8 @@ println!(
 
     let res = scheduler_synthesis(
         models_ls, model.num_agents, model.tasks.size, w, &target, 
-        epsilon1, epsilon2, HardwareChoice::CPU, dbug, max_iter, max_unstable
+        epsilon1, epsilon2, HardwareChoice::CPU, dbug, max_iter, max_unstable,
+        &constraint_threshold
     );
 
     match dbug {

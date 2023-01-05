@@ -2,9 +2,11 @@ import hybrid
 import itertools
 import random
 import argparse
+import numpy as np
 
 
 random.seed(a=12345, version=2)
+np.random.seed = 12345
 
 # ------------------------------------------------------------------------------
 # ARGS: Program args for repeating and controlling experiments
@@ -14,7 +16,7 @@ parser = argparse.ArgumentParser(description="Test MORAP framework with smart-wa
 parser.add_argument('--agents', dest='num_agents', default=2, help='the number of agents in MAS', 
                     required=True, type=int)
 parser.add_argument('--size', dest='size', default=6, help='size of the warehouse 6 | 12', 
-                    required=True, choices=[6, 12], type=int)
+                    required=True, choices=[6, 8, 10, 12], type=int)
 parser.add_argument('--hware', dest='hardware', default='CPU', 
                     choices=['CPU', 'GPU', 'HYBRID'])
 parser.add_argument('--cpu', dest='num_cpus', default=2, type=int, 
@@ -28,9 +30,9 @@ parser.add_argument('--iter', dest='max_iter', default=1000, type=int,
                     help='The max number of iterations in VI before loop force terminates')
 parser.add_argument('--unstable', dest='max_unstable', default=30, type=int, 
                     help='The number of divegent state-values before infinity is recognised')
-parser.add_argument('--clb', dest="clower_bound", default=15., type=float, 
+parser.add_argument('--clb', dest="clower_bound", default=14., type=float, 
                     help="The lower bound on the cost selection distribution")
-parser.add_argument('--cub', dest="cupper_bound", default=17., type=float, 
+parser.add_argument('--cub', dest="cupper_bound", default=16., type=float, 
                     help="The upper bound on the cost selection distribution")
 
 args = parser.parse_args()
@@ -166,8 +168,10 @@ print("Check sum w = 1", sum(w))
 #hybrid.test_warehouse_CPU_only(scpm, warehouse_api, w, eps, debug)
 #hybrid.test_warehouse_single_CPU(scpm, warehouse_api, w, eps, debug)
 #hybrid.test_warehouse_hybrid(scpm, warehouse_api, w, eps, NUM_CPUs, debug)
-target = [-random.uniform(LB, UB)] * NUM_AGENTS + [0.79] * NUM_TASKS
+constraint_threshold = [1.] * NUM_AGENTS + [0.] * NUM_TASKS
+target = np.random.uniform(low=-LB,high=-UB,size=NUM_AGENTS).tolist() + [0.7] * NUM_TASKS
+print(f"Target: {np.round(target, 2)}")
 
 # Run decentralised model building and synthesis
 hybrid.test_warehouse_dec(scpm, warehouse_api, w, target, EPSILON1, EPSILON2, debug, 
-                          HARDWARE, NUM_CPUs, MAX_ITER, MAX_UNSTABLE)
+                          HARDWARE, NUM_CPUs, MAX_ITER, MAX_UNSTABLE, constraint_threshold)
