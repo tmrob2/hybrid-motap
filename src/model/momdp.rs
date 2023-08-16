@@ -121,7 +121,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash, E: Env<S> {
         }
         let row_idx = *adjusted_state_action.get(&(sidx as i32)).unwrap();
         for action in 0..actions.len() {
-            match mdp.step_(s, action as u8, task_id) {
+            match mdp.step_(s, action as u8, task_id, agent_id) {
                 Ok(v) => {
                     if !v.is_empty() {
                         match enabled_actions.get_mut(&(sidx as i32)) {

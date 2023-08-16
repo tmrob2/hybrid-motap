@@ -115,6 +115,32 @@ impl DFA {
     }*/
 }
 
+impl DFA {
+    pub fn check_fin(&self, q: i32) -> bool {
+        if self.done.contains(&q) || self.rejecting.contains(&q) {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn zero_rewards(&self, q: i32) -> bool {
+        if self.check_fin(q) || self.accepting.contains(&q) {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn fin_or_init(&self, q: i32) -> bool {
+        if self.check_fin(q) || self.initial_state == q {
+            true
+        } else {
+            false 
+        }
+    }
+}
+
 /*#[pyfunction]
 #[pyo3(name="task_from_str")]
 pub fn json_deserialize_from_string(s: String) -> DFA {

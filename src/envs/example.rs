@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use std::time::Instant;
 use crate::{agent::env::Env, debug_level, 
-    model::{momdp::product_mdp_bfs, scpm::SCPM}, cpu_only_solver, Debug, 
+    model::{momdp::product_mdp_bfs, scpm::SCPM}, solvers::morap::cpu_only_solver, Debug, 
     algorithms::synth::{scheduler_synthesis, HardwareChoice}};
 
 
@@ -30,7 +30,7 @@ impl Example {
 }
 
 impl Env<State> for Example {
-    fn step_(&self, s: State, action: u8, _task_id: i32) -> Result<Vec<(State, f32, String)>, String> {
+    fn step_(&self, s: State, action: u8, _task_id: i32, _agent_id: i32) -> Result<Vec<(State, f32, String)>, String> {
         let transition: Result<Vec<(State, f32, String)>, String> = match s {
             0 => { 
                 match action {
@@ -75,7 +75,7 @@ impl Env<State> for Example {
         self.action_space.to_vec()
     }
 
-    fn get_states_len(&self) -> usize {
+    fn get_states_len(&self, _agent_id: i32) -> usize {
         self.states.len()
     }
 }

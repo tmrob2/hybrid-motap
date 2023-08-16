@@ -256,7 +256,7 @@ pub fn CTMDP_bfs<S, E>(
                     // i.e. implement env.step()
                     // have to subtract 3 from the base action as we used the first three spots 
                     // for the actions b1, b2, b3
-                    match mdp.step_(s, (action - 3) as u8, taskid) {
+                    match mdp.step_(s, (action - 3) as u8, taskid, 0) {
                         Ok(v) => {
                             if !v.is_empty() {
 

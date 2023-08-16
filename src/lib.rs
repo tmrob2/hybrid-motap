@@ -7,660 +7,102 @@ pub mod envs;
 pub mod algorithms;
 pub mod sparse;
 pub mod tests;
-use envs::example::Example;
-use model::centralised::CTMDP;
-use model::general::ModelFns;
+pub mod solvers;
+
+
+
+use agent::env::Env;
 //use envs::{message::MessageSender, warehouse::Warehouse};
 use model::scpm::SCPM;
 use pyo3::prelude::*;
 use rand::Rng;
 use sprs::CsMatBase;
 use task::dfa::{DFA, Mission};
-use envs::{message::*, warehouse::*, example::*};
+use envs::{message::*, warehouse::*, example::*, msg_variants::*, dst::*};
 use hashbrown::HashMap;
-use std::{hash::Hash, time::Instant};
-use model::momdp::MOProductMDP;
-use rayon::prelude::*;
-use sparse::argmax::argmaxM;
-use algorithms::dp::{initial_policy, optimal_policy, optimal_values};
+use std::hash::Hash;
+use std::time::Instant;
 
-use crate::algorithms::hybrid::{hybrid_stage2, hybrid_stage1};
 use std::io::prelude::*;
 use std::fs::File;
-use hungarian::minimize;
 
-/*
--------------------------------------------------------------------
-|                              SOLVERS                            |
-|                                                                 |
--------------------------------------------------------------------
-*/
+use crate::{model::mostapu::{StapuState, MOSTAPU_bfs}, solvers::motap::stapu_solver};
 
-pub fn hybrid_solver<S>(
-    output: Vec<MOProductMDP<S>>,
-    num_agents: usize,
-    num_tasks: usize,
-    w: &[f32],
+pub fn generic_motap_mostapu_cpu<E>(
+    model: &SCPM,
+    env: &E,
+    w: Vec<f32>,
     eps: f32,
-    CPU_COUNT: usize, 
-    debug: Debug,
+    debug: i32,
     max_iter: usize,
-    max_unstable: i32
-) -> (Vec<f32>, Vec<MOProductMDP<S>>, f32)
-where S: Copy + Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
+    max_unstable: i32,
+    initial_agent_states: &[i32]
+) where E: Env<i32> {
+println!("--------------------------");
+println!("   MOTAP MOSTAPU CPU TEST ");
+println!("--------------------------");
+
     let t1 = Instant::now();
-    let (models, M, Pi) = hybrid_stage1(
-        output, num_agents, num_tasks, w.to_vec(), eps, CPU_COUNT, debug, 
-        max_iter, max_unstable
+    let dbug = debug_level(debug);
+    let initial_state = StapuState {
+        s: env.get_init_state(0),
+        Q: (0..model.tasks.size).map(
+            |t| model.tasks.get_task(t).initial_state
+            ).collect(),
+        agentid: 0,
+        active_tasks: None,
+        remaining: (0..model.tasks.size as i32).collect()
+    };
+    let alloc_acts: Vec<i32> = (0..model.tasks.size as i32 + 1).collect();
+    let agent_acts: Vec<i32> = model.actions.iter()
+        .map(|a| a + model.tasks.size as i32 + 1)
+        .collect();
+    let actions = [&alloc_acts[..], &agent_acts[..]].concat();
+    let stapu = MOSTAPU_bfs(
+        initial_state, 
+        env, 
+        model.num_agents, 
+        model.tasks.size, 
+        model.tasks.size + model.num_agents, 
+        model, 
+        &actions,
+        initial_agent_states
     );
-    let assignment = 
-        minimize(&M, num_tasks, num_agents);
-
-    match debug {
-        Debug::Verbose2 => {
-            println!("Allocation matrix");
-            for task in 0..num_tasks {
-                for agent in 0..num_agents {
-                    if agent == num_agents - 1 {
-                        print!("{}\n", -M[task * num_tasks + agent]);
-                    } else {
-                        print!("{}, ", -M[task * num_tasks + agent]);
-                    }
+    /*let mut acc: Vec<usize> = Vec::new();
+    for state in stapu.states.iter() {
+        match state.active_tasks {
+            Some(t) => { 
+                let dfa = model.tasks.get_task( t as usize);
+                if dfa.accepting.contains(&state.Q[t as usize]) {
+                    acc.push(*stapu.state_map.get(state).unwrap());
                 }
             }
-            println!("End allocation matrix");
-            println!("assignment:\n{:?}", assignment);
+            None => { }
         }
-        _ => { }   
-    }
-    // The assignment needs to be transformed into something that we can process
-    // i.e. for each allocated task construct a vector which is (a, t, pi)
-    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
-        .enumerate()
-        .filter(|(_i, x)| x.is_some())
-        .map(|(i, x)| 
-            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
-        ).collect();
-
-    // Then for each allocation we need to make the argmax P, R matrices
-    let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
-                              CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
-        = allocation.into_par_iter().map(|(a, t, pi)| {
-        let pmdp: &MOProductMDP<S> = models.iter()
-            .filter(|m| m.agent_id == a && m.task_id == t)
-            .collect::<Vec<&MOProductMDP<S>>>()[0];
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (num_agents + num_tasks) as i32;
-        let argmaxP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
-        let argmaxR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
-        let init = *pmdp.state_map.get(&pmdp.initial_state).unwrap();
-        (a, t, argmaxP, argmaxR, init)
-    }).collect();
-    let nobjs = num_agents + num_tasks;
-    let returns = hybrid_stage2(
-        allocatedArgMax, eps, nobjs, 
-        num_agents, num_tasks, CPU_COUNT, debug, max_iter, max_unstable);
-    
-    //println!("result: {:?}", returns);
-    (returns, models, t1.elapsed().as_secs_f32())
-}
-
-pub fn gpu_only_solver<S>(
-    models_ls: &[MOProductMDP<S>],
-    num_agents: usize,
-    num_tasks: usize,
-    w: &[f32],
-    eps: f32,
-    debug: Debug,
-    max_iter: i32, 
-    max_unstable: i32
-) -> (Vec<f32>, f32)
-where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
-    
-    
-    let mut w_init = vec![0.; num_agents + num_tasks];
-    for k in 0..num_agents {
-        w_init[k] = 1.;
-    }
-    
-    let t2 = Instant::now();
-    //let mut results: HashMap<i32, Vec<Option<(i32, Vec<i32>, f32)>>> = HashMap::new();
-    let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
-    let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
-    for pmdp in models_ls.iter() {
-        let enabled_actions = pmdp.get_enabled_actions();
-        let state_size = pmdp.get_states().len();
-        let mut pi = choose_random_policy(state_size, enabled_actions);
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (num_agents + num_tasks) as i32;
-        let initP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
-        let initR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
-
-        let mut r_v_init: Vec<f32> = vec![0.; initR.shape().0 as usize];
-        let mut x_init: Vec<f32> = vec![0.; initP.shape().1 as usize];
-        let mut y_init: Vec<f32> = vec![0.; initP.shape().0 as usize];
-        let mut unstable: Vec<i32> = vec![0; initP.shape().0 as usize];
-        let mut stable: Vec<f32> = vec![0.; x_init.len()];
-        let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
-        let mut rmv: Vec<f32> = vec![0.; pmdp.P.shape().0];
-
-        cuda_initial_policy_value_pinned_graph(
-            initP.view(), 
-            initR.view(), 
-            pmdp.P.view(), 
-            pmdp.R.view(), 
-            &w_init,
-            &w, 
-            eps, 
-            &mut x_init, 
-            &mut y_init, 
-            &mut r_v_init, 
-            &mut y, 
-            &mut rmv, 
-            &mut unstable, 
-            &mut pi, 
-            &pmdp.enabled_actions, 
-            &pmdp.adjusted_state_act_pair,
-            &mut stable,
-            max_iter, 
-            max_unstable
-        );
-        
-        M[pmdp.task_id as usize * num_agents + pmdp.agent_id as usize] = 
-            (x_init[*pmdp.state_map.get(&pmdp.initial_state).unwrap()] * 1_000_000.0) as i32;
-        Pi.insert((pmdp.agent_id, pmdp.task_id), pi.to_owned());
-    }
-
-    let assignment = 
-        minimize(&M, num_tasks, num_agents);
-
-    match debug {
-        Debug::Verbose2 => {
-            println!("Allocation matrix");
-            for task in 0..num_tasks {
-                for agent in 0..num_agents {
-                    if agent == num_agents - 1 {
-                        print!("{}\n", -M[task * num_tasks + agent]);
-                    } else {
-                        print!("{}, ", -M[task * num_tasks + agent]);
-                    }
-                }
-            }
-            println!("End allocation matrix");
-            println!("assignment:\n{:?}", assignment);
-        }
-        _ => { }   
-    }
-
-    match debug {
-        Debug::Verbose1 | Debug::Verbose2 => { 
-            println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-        }
-        _ => { }
-    }
-
-    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
-        .enumerate()
-        .filter(|(_i, x)| x.is_some())
-        .map(|(i, x)| 
-            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
-        ).collect();
-
-    // Then for each allocation we need to make the argmax P, R matrices
-    let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
-                              CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
-        = allocation.into_par_iter().map(|(a, t, pi)| {
-        let pmdp: &MOProductMDP<S> = models_ls.iter()
-            .filter(|m| m.agent_id == a && m.task_id == t)
-            .collect::<Vec<&MOProductMDP<S>>>()[0];
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (num_agents + num_tasks) as i32;
-        let argmaxP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
-        let argmaxR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
-        let init = *pmdp.state_map.get(&pmdp.initial_state).unwrap();
-        (a, t, argmaxP, argmaxR, init)
-    }).collect();
-    let nobjs = num_agents + num_tasks;
-    let mut returns: Vec<f32> = vec![0.; nobjs];
-    for (a, t, P, R, init) in allocatedArgMax.into_iter() {
-        let r = cuda_multi_obj_solution(P.view(), R.view(), eps, nobjs as i32, max_iter, max_unstable);
-        returns[a as usize] += r[(a as usize) * P.shape().0 + init];
-        let kt = num_agents + t as usize;
-        returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
-    }
-    (returns, t2.elapsed().as_secs_f32())
-}
-
-pub fn cpu_only_solver<S>(
-    models_ls: &[MOProductMDP<S>],
-    num_agents: usize,
-    num_tasks: usize,
-    w: &[f32],
-    eps: f32,
-    debug: Debug,
-    max_iter: usize,
-    max_unstable: i32
-) -> (Vec<f32>, f32)
-where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
-    let t2 = Instant::now();
-    // Input all of the models into the rayon framework
+    }*/
     //
-    let mut output: Vec<(i32, i32, Vec<i32>, f32)> = models_ls.par_iter().map(|pmdp| {
-        
-        let enabled_actions = pmdp.get_enabled_actions();
-        let state_size = pmdp.get_states().len();
-        let mut pi = choose_random_policy(state_size, enabled_actions);
-
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (num_agents + num_tasks) as i32;
-        let initP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, 
-                    &pmdp.adjusted_state_act_pair);
-        let initR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, 
-                    &pmdp.adjusted_state_act_pair);
-
-        let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
-        let mut x: Vec<f32> = vec![0.; initP.shape().1];
-        let mut y: Vec<f32> = vec![0.; initP.shape().0];
-        
-        initial_policy(initP.view(), initR.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y, max_iter, max_unstable);
-
-        // taking the initial policy and the value vector for the initial policy
-        // what is the optimal policy
-        let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
-        let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
-        let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y, &mut pi, 
-                    &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
-                    *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
-                    max_iter);
-        (pmdp.agent_id, pmdp.task_id, pi, r)
-    }).collect();
-    let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
-    let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
-    for (i,j,pi,r) in output.drain(..) {
-        M[j as usize * num_agents + i as usize] = (r * 1_000_000.0) as i32;
-        Pi.insert((i,j), pi);
-    }
-    
-    let assignment = 
-        minimize(&M, num_tasks, num_agents);
-
-    match debug {
-        Debug::Verbose2 => {
-            println!("Allocation matrix");
-            for task in 0..num_tasks {
-                for agent in 0..num_agents {
-                    if agent == num_agents - 1 {
-                        print!("{}\n", -M[task * num_tasks + agent]);
-                    } else {
-                        print!("{}, ", -M[task * num_tasks + agent]);
-                    }
-                }
-            }
-            println!("End allocation matrix");
-            println!("assignment:\n{:?}", assignment);
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Time to create mamdp model: {}\n|S|: {},\n|P|: {}", 
+                t1.elapsed().as_secs_f32(),
+                stapu.states.len(),
+                stapu.P.nnz()
+            );
         }
-        _ => { }   
     }
-    // The assignment needs to be transformed into something that we can process
-    // i.e. for each allocated task construct a vector which is (a, t, pi)
-    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
-        .enumerate()
-        .filter(|(_i, x)| x.is_some())
-        .map(|(i, x)| 
-            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
-        ).collect();
-    
-    match debug {
-        Debug::Verbose1 | Debug::Verbose2 => {
-            println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-        }
-        _ => { }
-    }
-    
-    let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
-                              CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
-        = allocation.into_par_iter().map(|(a, t, pi)| {
-        let pmdp: &MOProductMDP<S> = models_ls.iter()
-            .filter(|m| m.agent_id == a && m.task_id == t)
-            .collect::<Vec<&MOProductMDP<S>>>()[0];
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (num_agents + num_tasks) as i32;
-        let argmaxP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
-        let argmaxR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
-        let init = *pmdp.state_map.get(&pmdp.initial_state).unwrap();
-        (a, t, argmaxP, argmaxR, init)
-    }).collect();
-    let nobjs = num_agents + num_tasks;
-    let mut returns: Vec<f32> = vec![0.; nobjs];
-    let ret_ :Vec<(i32, i32, f32, f32)> = allocatedArgMax.into_par_iter().map(|(a, t, P, R, init)| {
-        let r = optimal_values(P.view(), R.view(), eps, nobjs, max_iter, max_unstable);
-        let kt = num_agents + t as usize;
-        (a, t, r[(a as usize) * P.shape().0 + init], r[kt * P.shape().0 + init])
-    }).collect();
 
-    for (a, t, a_cost, t_prob) in ret_.into_iter() {
-        returns[a as usize] += a_cost;
-        returns[num_agents + t as usize] += t_prob;
+    let result = stapu_solver(&stapu, model.num_agents, 
+        model.tasks.size, &w, eps, dbug, max_iter, max_unstable);
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+            println!("result: {:?}", result);
+        }
     }
-    
-    (returns, t2.elapsed().as_secs_f32())
 }
 
-pub fn single_cpu_solver<S>(
-    models_ls: Vec<MOProductMDP<S>>,
-    num_agents: usize,
-    num_tasks: usize,
-    w: &[f32],
-    eps: f32,
-    debug: Debug,
-    max_iter: usize,
-    max_unstable: i32
-) -> Vec<f32>
-where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
-    let t2 = Instant::now();
-    // Input all of the models into the rayon framework
-    //
-    let mut output: Vec<(i32, i32, Vec<i32>, f32)> = models_ls.iter().map(|pmdp| {
-        let enabled_actions = pmdp.get_enabled_actions();
-        let state_size = pmdp.get_states().len();
-        let mut pi = choose_random_policy(state_size, enabled_actions);
-
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (num_agents + num_tasks) as i32;
-        let initP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, 
-                    &pmdp.adjusted_state_act_pair);
-        let initR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, 
-                    &pmdp.adjusted_state_act_pair);
-
-        let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
-        let mut x: Vec<f32> = vec![0.; initP.shape().1];
-        let mut y: Vec<f32> = vec![0.; initP.shape().0];
-        
-        initial_policy(initP.view(), initR.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y, max_iter, max_unstable);
-
-        // taking the initial policy and the value vector for the initial policy
-        // what is the optimal policy
-        let mut r_v: Vec<f32> = vec![0.; pmdp.R.shape().0];
-        let mut y: Vec<f32> = vec![0.; pmdp.P.shape().0];
-        let r = optimal_policy(pmdp.P.view(), pmdp.R.view(), &w, eps, 
-                    &mut r_v, &mut x, &mut y, &mut pi, 
-                    &pmdp.enabled_actions, &pmdp.adjusted_state_act_pair,
-                    *pmdp.state_map.get(&pmdp.initial_state).unwrap(),
-                    max_iter);
-        (pmdp.agent_id, pmdp.task_id, pi, r)
-    }).collect();
-    let mut M: Vec<i32> = vec![0; num_agents * num_tasks];
-    let mut Pi: HashMap<(i32, i32), Vec<i32>> = HashMap::new();
-    for (i,j,pi,r) in output.drain(..) {
-        M[j as usize * num_agents + i as usize] = (r * 1_000_000.0) as i32;
-        Pi.insert((i,j), pi);
-    }
-    
-    let assignment = 
-        minimize(&M, num_tasks, num_agents);
-
-    match debug {
-        Debug::Verbose2 => {
-            println!("Allocation matrix");
-            for task in 0..num_tasks {
-                for agent in 0..num_agents {
-                    if agent == num_agents - 1 {
-                        print!("{}\n", -M[task * num_tasks + agent]);
-                    } else {
-                        print!("{}, ", -M[task * num_tasks + agent]);
-                    }
-                }
-            }
-            println!("End allocation matrix");
-            println!("assignment:\n{:?}", assignment);
-        }
-        _ => { }   
-    }
-    // The assignment needs to be transformed into something that we can process
-    // i.e. for each allocated task construct a vector which is (a, t, pi)
-    let allocation: Vec<(i32, i32, Vec<i32>)> = assignment.iter()
-        .enumerate()
-        .filter(|(_i, x)| x.is_some())
-        .map(|(i, x)| 
-            (x.unwrap() as i32, i as i32, Pi.get(&(x.unwrap() as i32, i as i32)).unwrap().to_owned())
-        ).collect();
-    
-    match debug {
-        Debug::Verbose1 | Debug::Verbose2 => {
-            println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-        }
-        _ => { }
-    }
-    
-    let allocatedArgMax: Vec<(i32, i32, CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>,
-                              CsMatBase<f32, i32, Vec<i32>, Vec<i32>, Vec<f32>>, usize)> 
-        = allocation.into_iter().map(|(a, t, pi)| {
-        let pmdp: &MOProductMDP<S> = models_ls.iter()
-            .filter(|m| m.agent_id == a && m.task_id == t)
-            .collect::<Vec<&MOProductMDP<S>>>()[0];
-        let rowblock = pmdp.states.len() as i32;
-        let pcolblock = rowblock as i32;
-        let rcolblock = (num_agents + num_tasks) as i32;
-        let argmaxP = 
-            argmaxM(pmdp.P.view(), &pi, rowblock, pcolblock, &pmdp.adjusted_state_act_pair);
-        let argmaxR = 
-            argmaxM(pmdp.R.view(), &pi, rowblock, rcolblock, &pmdp.adjusted_state_act_pair);
-        let init = *pmdp.state_map.get(&pmdp.initial_state).unwrap();
-        (a, t, argmaxP, argmaxR, init)
-    }).collect();
-    let nobjs = num_agents + num_tasks;
-    let mut returns: Vec<f32> = vec![0.; nobjs];
-    for (a, t, P, R, init) in allocatedArgMax.into_iter() {
-        let r = optimal_values(P.view(), R.view(), eps, nobjs, max_iter, max_unstable);
-        returns[a as usize] += r[(a as usize) * P.shape().0 + init];
-        let kt = num_agents + t as usize;
-        returns[num_agents + t as usize] += r[kt * P.shape().0 + init];
-    }
-    
-    returns
-}
-
-pub fn ctmdp_cpu_solver<S>(
-    ctmdp: &CTMDP<S>,
-    num_agents: usize,
-    num_tasks: usize,
-    w: &[f32],
-    eps: f32,
-    debug: Debug,
-    max_iter: usize,
-    max_unstable: i32
-) -> (Vec<f32>, f32)
-where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
-    let elapsed_time: f32;
-    let t2 = Instant::now();
-    // Input all of the models into the rayon framework
-    //
-    let enabled_actions = ctmdp.get_enabled_actions();
-    let state_size = ctmdp.get_states().len();
-    let mut pi = choose_random_policy(state_size, enabled_actions);
-
-    let rowblock = ctmdp.states.len() as i32;
-    let pcolblock = rowblock as i32;
-    let rcolblock = (num_agents + num_tasks) as i32;
-    let initP = 
-        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, 
-                &ctmdp.adjusted_state_act_pair);
-    let initR = 
-        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, 
-                &ctmdp.adjusted_state_act_pair);
-
-    //println!("init P shape: {:?}", initP.shape());
-
-    let mut r_v: Vec<f32> = vec![0.; initR.shape().0];
-    let mut x: Vec<f32> = vec![0.; initP.shape().1];
-    let mut y: Vec<f32> = vec![0.; initP.shape().0];
-
-    let wagent = vec![1.; num_agents]; 
-    let wtask = vec![0.; num_tasks];
-    let winit = [&wagent[..], &wtask[..]].concat();
-    
-    initial_policy(initP.view(), initR.view(), &winit, eps, 
-                   &mut r_v, &mut x, &mut y, max_iter, max_unstable);
-
-    //println!("init x: {:?}", x);
-
-    // taking the initial policy and the value vector for the initial policy
-    // what is the optimal policy
-    let mut r_v: Vec<f32> = vec![0.; ctmdp.R.shape().0];
-    let mut y: Vec<f32> = vec![0.; ctmdp.P.shape().0];
-    optimal_policy(ctmdp.P.view(), ctmdp.R.view(), &w, eps, 
-        &mut r_v, &mut x, &mut y, &mut pi, 
-        &ctmdp.enabled_actions, &ctmdp.adjusted_state_act_pair,
-        *ctmdp.state_map.get(&ctmdp.initial_state).unwrap(),
-        max_iter
-    );
-    
-    match debug {
-        Debug::Verbose1 | Debug::Verbose2 => {
-            println!("Time to do stage 1 {}", t2.elapsed().as_secs_f32());
-        }
-        _ => { }
-    }
-
-    let rowblock = ctmdp.states.len() as i32;
-    let pcolblock = rowblock as i32;
-    let rcolblock = (num_agents + num_tasks) as i32;
-    let argmaxP = 
-        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, &ctmdp.adjusted_state_act_pair);
-    let argmaxR = 
-        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, &ctmdp.adjusted_state_act_pair);
-    let init = *ctmdp.state_map.get(&ctmdp.initial_state).unwrap();
-    //println!("R: \n{:?}", argmaxR.to_dense());
-    let nobjs = num_agents + num_tasks;
-    let r = optimal_values(argmaxP.view(), argmaxR.view(), eps, nobjs, max_iter, max_unstable);
-    //println!("r: {:?}", r);
-    let mut returns = vec![0.; nobjs];
-    for k in 0..nobjs {
-        returns[k] = r[k * argmaxP.shape().0 + init];
-        //println!("Objective: {}\n{:.2?}", k, &r[k * argmaxP.shape().0..(k + 1) * argmaxP.shape().0])
-    }
-    elapsed_time = t2.elapsed().as_secs_f32();
-    match debug {
-        Debug::Verbose1 | Debug::Verbose2 => {
-            println!("Time to do stage 1 + 2 {}", elapsed_time);
-        }
-        _ => { }
-    }
-    (returns, elapsed_time)
-}
-
-pub fn ctmdp_gpu_solver<S>(
-    ctmdp: &CTMDP<S>,
-    num_agents: usize,
-    num_tasks: usize,
-    w: &[f32],
-    eps: f32,
-    debug: Debug,
-    max_iter: i32,
-    max_unstable: i32
-) -> (Vec<f32>, f32)
-where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
-    let elapsed_time: f32;
-    let t2 = Instant::now();
-    // Input all of the models into the rayon framework
-    //
-    let enabled_actions = ctmdp.get_enabled_actions();
-    let state_size = ctmdp.get_states().len();
-    let mut pi = choose_random_policy(state_size, enabled_actions);
-
-    let rowblock = ctmdp.states.len() as i32;
-    let pcolblock = rowblock as i32;
-    let rcolblock = (num_agents + num_tasks) as i32;
-    let initP = 
-        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, 
-                &ctmdp.adjusted_state_act_pair);
-    let initR = 
-        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, 
-                &ctmdp.adjusted_state_act_pair);
-
-    let wagent = vec![1.; num_agents]; 
-    let wtask = vec![0.; num_tasks];
-    let winit = [&wagent[..], &wtask[..]].concat();
-
-    //println!("init P shape: {:?}", initP.shape());
-
-    let mut r_v_init: Vec<f32> = vec![0.; initR.shape().0 as usize];
-    let mut x_init: Vec<f32> = vec![0.; initP.shape().1 as usize];
-    let mut y_init: Vec<f32> = vec![0.; initP.shape().0 as usize];
-    let mut unstable: Vec<i32> = vec![0; initP.shape().0 as usize];
-    let mut stable: Vec<f32> = vec![0.; x_init.len()];
-    let mut y: Vec<f32> = vec![0.; ctmdp.P.shape().0];
-    let mut rmv: Vec<f32> = vec![0.; ctmdp.P.shape().0];
-
-    cuda_initial_policy_value_pinned_graph(
-        initP.view(), 
-        initR.view(), 
-        ctmdp.P.view(), 
-        ctmdp.R.view(), 
-        &winit,
-        &w, 
-        eps, 
-        &mut x_init, 
-        &mut y_init, 
-        &mut r_v_init, 
-        &mut y, 
-        &mut rmv, 
-        &mut unstable, 
-        &mut pi, 
-        &ctmdp.enabled_actions, 
-        &ctmdp.adjusted_state_act_pair,
-        &mut stable,
-        max_iter, 
-        max_unstable
-    );
-
-    let rowblock = ctmdp.states.len() as i32;
-    let pcolblock = rowblock as i32;
-    let rcolblock = (num_agents + num_tasks) as i32;
-    let argmaxP = 
-        argmaxM(ctmdp.P.view(), &pi, rowblock, pcolblock, &ctmdp.adjusted_state_act_pair);
-    let argmaxR = 
-        argmaxM(ctmdp.R.view(), &pi, rowblock, rcolblock, &ctmdp.adjusted_state_act_pair);
-    let init = *ctmdp.state_map.get(&ctmdp.initial_state).unwrap();
-    //println!("R: \n{:?}", argmaxR.to_dense());
-    let nobjs = num_agents + num_tasks;
-    let r = cuda_multi_obj_solution(argmaxP.view(), argmaxR.view(), eps, nobjs as i32, max_iter, max_unstable);
-    //println!("r: {:?}", r);
-    let mut returns = vec![0.; nobjs];
-    for k in 0..nobjs {
-        returns[k] = r[k * argmaxP.shape().0 + init];
-        //println!("Objective: {}\n{:.2?}", k, &r[k * argmaxP.shape().0..(k + 1) * argmaxP.shape().0])
-    }
-    elapsed_time = t2.elapsed().as_secs_f32();
-    match debug {
-        Debug::Verbose1 | Debug::Verbose2 => {
-            println!("Time to do stage 1 + 2 {}", elapsed_time);
-        }
-        _ => { }
-    }
-    (returns, elapsed_time)
-}
 
 /*
 -------------------------------------------------------------------
@@ -668,7 +110,7 @@ where S: Copy + std::fmt::Debug + Eq + Hash + Send + Sync + 'static {
 |                                                                 |
 -------------------------------------------------------------------
 */
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum Debug {
     None,
     Base,
@@ -847,6 +289,93 @@ pub fn prism_file_generator(
     writeln!(buffer, "\t[a] true: 0;")?;
     writeln!(buffer, "\t[b] true: 1;")?;
     writeln!(buffer, "endrewards")?;
+    buffer.flush()?;
+    Ok(())
+}
+
+/// Write a PRISM file which represents a Agent x Task pair. 
+pub fn motap_prism_file_generator(
+    P: CsMatBase<f32, i32, &[i32], &[i32], &[f32]>,
+    state_space: usize,
+    adjusted_sidx: &[i32],
+    enabled_actions: &[i32],
+    initial_state: usize,
+    accepting_states: &[usize],
+    obj_rew: &HashMap<i32, i32>,
+    num_agents: i32,
+    num_tasks: i32
+) -> std::io::Result<()> 
+{
+    let mut buffer = File::create(format!("prism_A{}_T{}.mn", num_agents, num_tasks))?;
+    // document heading
+    writeln!(buffer, "mdp")?;
+    writeln!(buffer)?;
+    writeln!(buffer, "module M1")?;
+    writeln!(buffer)?;
+    writeln!(buffer, "\tx: [0..{}] init {};", state_space, initial_state)?;
+    writeln!(buffer)?;
+    // start model description
+    // end model description
+    // model tail
+    for r in 0..state_space {
+        for a in 0..enabled_actions[r] {
+            match obj_rew.get(&(r as i32)) {
+                Some(k) => {
+                    write!(buffer, "\t[{}] x={} -> ", format!("k{}", k), r)?;
+                }
+                None => {
+                    write!(buffer, "\t[] x={} -> ", r)?;
+                }
+            }
+            
+            // write the transition
+            let k = (P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize + 1] - 
+                P.indptr().raw_storage()[(adjusted_sidx[r]+ a) as usize]) as usize;
+            if k > 0 {
+                for j in 0..k {
+                    // data 
+                    let c = P.indices()[P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j];
+                    let p = P.data()[
+                        P.indptr().raw_storage()[(adjusted_sidx[r] + a) as usize] as usize + j
+                    ];
+                    if j == 0 && j < k - 1 {
+                        write!(buffer, "{}:(x'={}) ", p, c)?;
+                    } else if j == 0 && j == k - 1 {
+                        write!(buffer, "{}:(x'={});", p, c)?;
+                    } else if j == k - 1 {
+                        write!(buffer, "+ {}:(x'={});", p, c)?;
+                    } else {
+                        write!(buffer, "+ {}:(x'={}) ", p, c)?;
+                    }
+                }
+                write!(buffer, "\n")?;
+            }
+        }
+    }
+    writeln!(buffer)?;
+    writeln!(buffer, "endmodule")?;
+    writeln!(buffer)?;
+    write!(buffer, "label \"accepting\" = x=")?;
+    let mut count = 0;
+    for state in accepting_states.iter() {
+        if count == 0 {
+            write!(buffer, "{}", state)?;
+        } /*else if count == accepting_states.len() - 1 {
+            write!(buffer, " | x={};", state)?;
+        } */
+        else { 
+            write!(buffer, " | x={}", state)?;
+        }
+        count += 1;
+    }
+    write!(buffer, ";")?;
+    writeln!(buffer)?;
+    for k in 0..num_agents {
+        writeln!(buffer)?;
+        writeln!(buffer, "rewards \"obj{}\"", k)?;
+        writeln!(buffer, "\t[k{}] true: 1;", k)?;
+        writeln!(buffer, "endrewards")?;
+    }
     buffer.flush()?;
     Ok(())
 }
@@ -1196,7 +725,22 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Example>()?;
     m.add_class::<SCPM>()?;
     m.add_class::<Warehouse>()?;
+    // Exp 3 Variants
+    m.add_class::<MAS>()?;
+    m.add_class::<Model>()?;
+    // STAPU Exp
+    m.add_class::<DSTMAS>()?;
+    m.add_class::<DSTModel>()?;
+    //
     m.add_function(wrap_pyfunction!(test_build, m)?)?;
+    // MAMDP model building
+    m.add_function(wrap_pyfunction!(test_build_mamdp, m)?)?;
+    // SCPM Model building test
+    m.add_function(wrap_pyfunction!(test_build_scpm, m)?)?;
+    // STAPU Model building test
+    m.add_function(wrap_pyfunction!(test_build_stapu, m)?)?;
+    m.add_function(wrap_pyfunction!(dst_build_test, m)?)?;
+    //
     m.add_function(wrap_pyfunction!(test_initial_policy, m)?)?;
     m.add_function(wrap_pyfunction!(test_cuda_initial_policy, m)?)?;
     m.add_function(wrap_pyfunction!(test_threaded_initial_policy, m)?)?;
@@ -1211,6 +755,19 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_warehouse_gpu_only, m)?)?;
     m.add_function(wrap_pyfunction!(test_warehouse_single_CPU, m)?)?;
     m.add_function(wrap_pyfunction!(msg_test_cpu, m)?)?;
+    // motap cpu test
+    m.add_function(wrap_pyfunction!(motap_msg_test_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(motap_test_cpu, m)?)?;
+    // mamdp cpu test
+    m.add_function(wrap_pyfunction!(motap_mamdp_msg_test_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(motap_mamdp_test_cpu, m)?)?;
+    // SCPM cpu test
+    m.add_function(wrap_pyfunction!(motap_scpm_test_cpu, m)?)?;
+    // 
+    // STAPU
+    m.add_function(wrap_pyfunction!(motap_stapu_test_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(dst_stapu_model, m)?)?;
+    //
     m.add_function(wrap_pyfunction!(test_warehouse_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(test_make_prism_file, m)?)?;
     m.add_function(wrap_pyfunction!(warehouse_make_prism_file, m)?)?;
@@ -1220,6 +777,13 @@ fn hybrid(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(test_warehouse_dec, m)?)?;
     m.add_function(wrap_pyfunction!(example_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(ex_synthesis, m)?)?;
+    // motap scheduler synthesis
+    m.add_function(wrap_pyfunction!(motap_mamdp_synthesis_test, m)?)?;
+    m.add_function(wrap_pyfunction!(motap_mamdp_synth, m)?)?;
+    // virtual goal experiments
+    m.add_function(wrap_pyfunction!(motap_mamdp_synth, m)?)?;
+    m.add_function(wrap_pyfunction!(motap_synth, m)?)?;
+    m.add_function(wrap_pyfunction!(motap_mamdp_synth, m)?)?;
     Ok(())
 }
 

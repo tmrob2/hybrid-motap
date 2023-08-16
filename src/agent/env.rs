@@ -1,5 +1,5 @@
 pub trait Env<S> {
-    fn step_(&self, s: S, action: u8, task_id: i32) -> Result<Vec<(S, f32, String)>, String>;
+    fn step_(&self, s: S, action: u8, task_id: i32, agent_id: i32) -> Result<Vec<(S, f32, String)>, String>;
 
     fn get_init_state(&self, agent: usize) -> S;
 
@@ -7,5 +7,5 @@ pub trait Env<S> {
 
     fn get_action_space(&self) -> Vec<i32>;
 
-    fn get_states_len(&self) -> usize;
+    fn get_states_len(&self, agent_id: i32) -> usize;
 }

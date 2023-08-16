@@ -20,9 +20,10 @@ sprs = "0.11.0"
 array-macro = "2.1.5"
 hungarian = "1.1.1"
 ordered-float = "3.3.0"
-#lp-modeler = {version = "0.5.0", features=["minilp"]}
+lp-modeler = {version = "0.5.0"}
 minilp = "0.2.2"
 fluid-let = "1.0.0"
+termcolor = "1.2.0"
 
 [build-dependencies]
 cc = "1.0"

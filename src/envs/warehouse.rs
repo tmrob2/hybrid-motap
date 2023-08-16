@@ -8,7 +8,11 @@ use crate::algorithms::synth::{ctmdp_scheduler_synthesis, HardwareChoice, schedu
 use crate::model::centralised::CTMDP_bfs;
 use crate::model::general::ModelFns;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, hybrid_solver, Debug, debug_level, prism_file_generator, single_cpu_solver, prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, prism_explicit_label_file_generator, storm_explicit_tra_file_generator, storm_explicit_label_file_generator, prism_explicit_transrew_file_generator};
+    cuda_warm_up_gpu, solvers::morap::gpu_only_solver, solvers::morap::hybrid_solver, 
+    Debug, debug_level, prism_file_generator, solvers::morap::single_cpu_solver, 
+    prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, 
+    prism_explicit_label_file_generator, storm_explicit_tra_file_generator, 
+    storm_explicit_label_file_generator, prism_explicit_transrew_file_generator};
 use crate::sparse::argmax::argmaxM;
 use crate::model::momdp::product_mdp_bfs;
 use crate::model::scpm::SCPM;
@@ -133,7 +137,7 @@ impl Warehouse {
     }
 
     fn step(&self, state: State, action: u8, task_id: i32) -> PyResult<Vec<(State, f32, String)>> {
-        let v = match self.step_(state, action, task_id){
+        let v = match self.step_(state, action, task_id, 0){
             Ok(result) => { result }
             Err(e) => {
                 return Err(PyValueError::new_err(format!(
@@ -251,7 +255,7 @@ impl Warehouse {
 }
 
 impl Env<State> for Warehouse {
-    fn step_(&self, state: State, action: u8, task_id: i32) -> Result<Vec<(State, f32, String)>, String> {
+    fn step_(&self, state: State, action: u8, task_id: i32, _agent_id: i32) -> Result<Vec<(State, f32, String)>, String> {
         let psuccess :f32 = self.psuccess;
         let mut v: Vec<(State, f32, String)> = Vec::new();
         if vec![0, 1, 2, 3].contains(&action) {
@@ -373,7 +377,7 @@ impl Env<State> for Warehouse {
         todo!()
     }
 
-    fn get_states_len(&self) -> usize {
+    fn get_states_len(&self, _agent_id: i32) -> usize {
         todo!()
     }
 }

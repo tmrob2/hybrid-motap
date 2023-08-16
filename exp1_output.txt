@@ -1,0 +1,606 @@
+--------------------------
+   MOTAP SYNTH A:2 T:2
+--------------------------
+Time to create 4 models: 0.004306764
+|S|: 72,
+|P|: 120
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000018
+No new separating hyperplane possible
+v: [1.0]
+MAS cost: -11.940401
+Average loop run time: 0.002524481
+Number of iterations: 1
+Total model checking time: 0.002524481
+Synthesis total run time: 0.00295082
+--------------------------
+   MOTAP SYNTH A:2 T:3
+--------------------------
+Time to create 6 models: 0.003707076
+|S|: 114,
+|P|: 192
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000005
+Distance: 8.461488
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000026
+Distance: 0.118247285
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000341
+Distance: 0.11263653
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000005
+Distance: 0.10697441
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000036
+Distance: 0.008771496
+================
+t[up] == t[down]
+================
+v: [0.59426624, 0.004436714, 0.15553361, 0.13278964, 0.112973765]
+MAS cost: -17.58237
+Average loop run time: 0.0018804092
+Number of iterations: 5
+Total model checking time: 0.009402046
+Synthesis total run time: 0.011853358
+--------------------------
+   MOTAP SYNTH A:2 T:4
+--------------------------
+Time to create 8 models: 0.003697708
+|S|: 160,
+|P|: 272
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000021
+Distance: 18.607243
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.29526022
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.2912948
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.287292
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.28325135
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000081
+Distance: 0.13528991
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.03862431
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.0068490547
+================
+t[up] == t[down]
+================
+v: [0.41225255, 0.0, 0.0, 0.15966313, 0.11489547, 0.075058065, 0.13965747, 0.09847332]
+MAS cost: -26.844553
+Average loop run time: 0.001959076
+Number of iterations: 8
+Total model checking time: 0.015672607
+Synthesis total run time: 0.020013304
+--------------------------
+   MOTAP SYNTH A:2 T:5
+--------------------------
+Time to create 10 models: 0.003963813
+|S|: 210,
+|P|: 360
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000016
+Distance: 31.60096
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.41758153
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000251
+Distance: 0.41559556
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000022
+Distance: 0.411972
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000051
+Distance: 0.4097013
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000011
+Distance: 0.40625378
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000772
+Distance: 0.3671722
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000005
+wr: -0.1318518 < wt: -0.0048798025
+Distance: 0.2843648
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000024
+Distance: 0.25822788
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000008
+wr: -0.3653731 < wt: -0.17069536
+Distance: 0.26416743
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000201
+Distance: 0.084850766
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000008
+wr: -0.40749186 < wt: -0.3557704
+Distance: 0.033868995
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000017
+Distance: 0.031098839
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000021
+wr: -0.42696434 < wt: -0.42290252
+Distance: 0.025051765
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+wr: -0.4626641 < wt: -0.44029984
+Distance: 0.0028039892
+================
+t[up] == t[down]
+================
+v: [0.29405215, 0.56496423, 0.0, 0.04554878, 0.0, 0.033834692, 0.031484865, 0.022835545, 0.0, 0.007279735, 0.0, 0.0, 0.0, 0.0, 0.0]
+MAS cost: -25.988394
+Average loop run time: 0.0023698735
+Number of iterations: 15
+Total model checking time: 0.035548102
+Synthesis total run time: 0.32304487
+--------------------------
+   MOTAP SYNTH A:2 T:6
+--------------------------
+Time to create 12 models: 0.004022956
+|S|: 264,
+|P|: 456
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000181
+Distance: 46.870342
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 1.0276423
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.51393497
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.5126506
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+wr: 0.034166217 < wt: 0.11212191
+Distance: 0.51017874
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000231
+Distance: 0.50869924
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000007
+Distance: 0.5074777
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.5064312
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000015
+wr: 0.073940486 < wt: 0.09292336
+Distance: 0.48365647
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+wr: 0.12745376 < wt: 0.25563312
+Distance: 0.39146006
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+wr: -0.30641252 < wt: 0.024731234
+Distance: 0.05906167
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.05851321
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+wr: -0.34190848 < wt: -0.32171267
+Distance: 0.03768934
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.036559884
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000031
+wr: -0.37638167 < wt: -0.35585794
+Distance: 0.015950236
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000008
+Distance: 0.015605371
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+wr: -0.38708577 < wt: -0.3769089
+Distance: 0.0050666854
+================
+t[up] == t[down]
+================
+v: [0.17050552, 0.57333606, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.06914185, 0.035417423, 0.050800018, 0.0, 0.04137316, 0.016708957, 0.042717025, 0.0]
+MAS cost: -33.417896
+Average loop run time: 0.002616459
+Number of iterations: 17
+Total model checking time: 0.044479802
+Synthesis total run time: 0.3968193
+--------------------------
+   MOTAP SYNTH A:2 T:7
+--------------------------
+Time to create 14 models: 0.004323286
+|S|: 322,
+|P|: 560
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000017
+Distance: 45.422665
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000231
+Distance: 0.32518747
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.32227227
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000027
+Distance: 0.31964943
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000231
+Distance: 0.31705704
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000251
+Distance: 0.31407815
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000025
+Distance: 0.31109738
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000021
+Distance: 0.3073479
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000231
+Distance: 0.14804421
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000221
+Distance: 0.11983941
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000211
+Distance: 0.10236537
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000271
+Distance: 0.09440458
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+wr: -0.22658691 < wt: -0.2206482
+Distance: 0.08847838
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000281
+Distance: 0.084394746
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000007
+wr: -0.23872821 < wt: -0.22323494
+Distance: 0.06711734
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000007
+wr: -0.22503243 < wt: -0.22393668
+Distance: 0.06478007
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000028
+wr: -0.26087707 < wt: -0.24482088
+Distance: 0.04779156
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000008
+wr: -0.24454276 < wt: -0.21683758
+Distance: 0.018354213
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.016709156
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000241
+Distance: 0.016100649
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.015583041
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000191
+wr: -0.31417733 < wt: -0.31278902
+Distance: 0.013319889
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000028
+Distance: 0.013162967
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000007
+wr: -0.3085429 < wt: -0.3058264
+Distance: 0.009785409
+================
+t[up] == t[down]
+================
+v: [0.0, 0.065262064, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.054436024, 0.0, 0.04226989, 0.0, 0.02855851, 0.0, 0.0, 0.0, 0.43647078, 0.0, 0.01629912, 0.112912245, 0.12434612, 0.052532803, 0.06691246]
+MAS cost: -58.190018
+Average loop run time: 0.0027996285
+Number of iterations: 24
+Total model checking time: 0.06719109
+Synthesis total run time: 0.4651538
+--------------------------
+   MOTAP SYNTH A:2 T:8
+--------------------------
+Time to create 16 models: 0.00402035
+|S|: 384,
+|P|: 672
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000013
+Distance: 66.06487
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.42348096
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000041
+Distance: 0.421261
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000025
+Distance: 0.41926444
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000241
+Distance: 0.41731942
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000024
+Distance: 0.4152599
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.41291597
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000006
+Distance: 0.41052264
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000481
+Distance: 0.40796238
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000006
+Distance: 0.34380442
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000028
+Distance: 0.30967814
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+wr: -0.18867423 < wt: 0.06055981
+Distance: 0.07712046
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.054760896
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.051473074
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000025
+Distance: 0.047213446
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000025
+Distance: 0.0456582
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000017
+Distance: 0.042808227
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000241
+wr: -0.23020107 < wt: -0.22617924
+Distance: 0.04232977
+Status: Optimal
+Time to do stage 1 + stage 2: 0.0000002
+Distance: 0.04022212
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000001022
+wr: -0.2707603 < wt: -0.24216853
+Distance: 0.011688371
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000008
+Distance: 0.011060344
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000631
+Distance: 0.010189321
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000221
+wr: -0.27814624 < wt: -0.27764207
+Distance: 0.009451815
+================
+t[up] == t[down]
+================
+v: [0.022958517, 0.14023508, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0024647317, 0.0, 0.16802226, 0.0, 0.2048035, 0.0, 0.019860893, 0.0, 0.1372735, 0.0, 0.0, 0.13239647, 0.054826688, 0.095962964, 0.021195376]
+MAS cost: -55.475193
+Average loop run time: 0.0027459979
+Number of iterations: 23
+Total model checking time: 0.06315795
+Synthesis total run time: 0.38033763
+--------------------------
+   MOTAP SYNTH A:2 T:9
+--------------------------
+Time to create 18 models: 0.00441519
+|S|: 450,
+|P|: 792
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000005
+Distance: 84.654976
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000181
+Distance: 0.4620111
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.4600524
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000011
+Distance: 0.45828852
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.45658848
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.45486444
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000027
+Distance: 0.45296356
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000001483
+Distance: 0.45099846
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000005
+Distance: 0.4484881
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000221
+Distance: 0.44583768
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+Distance: 0.418032
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000801
+Distance: 0.41117796
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000251
+wr: -0.1315525 < wt: 0.197453
+Distance: 0.12934169
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000211
+Distance: 0.08595241
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000009
+Distance: 0.08070792
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000021
+Distance: 0.07630384
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000006
+Distance: 0.0751483
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.074162066
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000023
+Distance: 0.07182084
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000006
+wr: -0.24646161 < wt: -0.1965263
+Distance: 0.025950454
+Status: Optimal
+Time to do stage 1 + stage 2: 0.0000002
+Distance: 0.025609806
+Status: Optimal
+Time to do stage 1 + stage 2: 0.0000002
+Distance: 0.024491012
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000331
+Distance: 0.023065863
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000021
+Distance: 0.02289301
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000211
+wr: -0.23633638 < wt: -0.22930586
+Distance: 0.014938619
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000038
+Distance: 0.014437736
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000001854
+Distance: 0.013677366
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000023
+wr: -0.24692602 < wt: -0.2440622
+Distance: 0.010603856
+Status: Optimal
+Time to do stage 1 + stage 2: 0.0000002
+wr: -0.2430187 < wt: -0.23951119
+Distance: 0.006895362
+================
+t[up] == t[down]
+================
+v: [0.08428516, 0.39035714, 0.08224873, 0.0, 0.0, 0.0, 0.00037446225, 0.0, 0.0, 0.00975372, 0.0, 0.109936886, 0.15861858, 0.0, 0.0, 0.043588027, 0.0, 0.0, 0.008952624, 0.0, 0.0, 0.026231332, 0.0, 0.0, 0.07809732, 0.0, 0.0, 0.0, 0.007556002]
+MAS cost: -60.118557
+Average loop run time: 0.0027786337
+Number of iterations: 29
+Total model checking time: 0.080580376
+Synthesis total run time: 0.45803812
+--------------------------
+   MOTAP SYNTH A:2 T:10
+--------------------------
+Time to create 20 models: 0.005361827
+|S|: 520,
+|P|: 920
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 108.0734
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000023
+Distance: 0.51197344
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000231
+Distance: 0.510395
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.5089704
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000017
+Distance: 0.50760823
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000008
+Distance: 0.50625163
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000221
+Distance: 0.5047691
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+Distance: 0.50324875
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000041
+Distance: 0.50162524
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000022
+Distance: 0.4997321
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000023
+Distance: 0.49731573
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000008
+Distance: 0.47508526
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000006
+wr: 0.20566949 < wt: 0.31330872
+Distance: 0.44786412
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000261
+Distance: 0.40731552
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000003
+wr: -0.108141795 < wt: 0.21177629
+Distance: 0.08689409
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000311
+Distance: 0.08436161
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000061
+wr: -0.11271469 < wt: -0.11046858
+Distance: 0.081932575
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000006
+Distance: 0.081411295
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000026
+Distance: 0.080711946
+Status: Optimal
+Time to do stage 1 + stage 2: 0.000000431
+Distance: 0.078654565
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000027
+Distance: 0.07677454
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000024
+Distance: 0.07564346
+Status: Optimal
+Time to do stage 1 + stage 2: 0.0000002
+wr: -0.13413608 < wt: -0.13272694
+Distance: 0.07338548
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000004
+wr: -0.21041808 < wt: -0.14680609
+Distance: 0.0125856465
+Status: Optimal
+Time to do stage 1 + stage 2: 0.00000009
+Distance: 0.009960743
+================
+t[up] == t[down]
+================
+v: [0.0, 0.34664732, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.06482316, 0.0, 0.019644596, 0.05438748, 0.117486484, 0.033860374, 0.03775379, 0.0019545804, 0.08482523, 0.03792751, 0.07112754, 0.0637885, 0.065773435]
+MAS cost: -71.02627
+Average loop run time: 0.0031308774
+Number of iterations: 25
+Total model checking time: 0.07827193
+Synthesis total run time: 0.45222008

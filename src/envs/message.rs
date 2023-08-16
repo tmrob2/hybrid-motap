@@ -5,22 +5,27 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use sprs::prod::mul_acc_mat_vec_csr;
 use crate::algorithms::dp::{initial_policy, optimal_policy};
-use crate::algorithms::synth::{scheduler_synthesis, HardwareChoice};
+use crate::algorithms::synth::{scheduler_synthesis, HardwareChoice, mamdp_scheduler_synthesis, motap_scheduler_synthesis};
 use crate::model::centralised::CTMDP_bfs;
 use crate::model::general::ModelFns;
+use crate::model::mamdp::{MOMAMDP_bfs, MAMDPState};
+use crate::model::mostapu::{MOSTAPU_bfs, StapuState};
+use crate::solvers::motap::{motap_cpu_only_solver, mamdp_cpu_solver};
 use crate::sparse::argmax::argmaxM;
 use crate::{product, cuda_initial_policy_value, cuda_policy_optimisation, 
-    cuda_warm_up_gpu, gpu_only_solver, cpu_only_solver, hybrid_solver, 
-    debug_level, prism_file_generator, ctmdp_cpu_solver, 
+    cuda_warm_up_gpu, solvers::morap::gpu_only_solver, solvers::morap::cpu_only_solver, 
+    solvers::morap::hybrid_solver, debug_level, prism_file_generator, solvers::morap::ctmdp_cpu_solver, 
     prism_explicit_tra_file_generator, prism_explicit_staterew_file_generator, 
     prism_explicit_label_file_generator, storm_explicit_tra_file_generator, 
     storm_explicit_staterew_file_generator, storm_explicit_label_file_generator, 
-    prism_explicit_transrew_file_generator, ctmdp_gpu_solver};
+    prism_explicit_transrew_file_generator, solvers::morap::ctmdp_gpu_solver};
 use crate::agent::env::Env;
 use crate::model::momdp::product_mdp_bfs;
-use crate::model::scpm::SCPM;
+use crate::model::scpm::{SCPM, SCPM_bfs, SCPMState};
 use crate::model::momdp::MOProductMDP;
 use crate::{Debug, choose_random_policy};
+
+use super::msg_variants::MAS;
 
 type State = i32;
 
@@ -46,7 +51,7 @@ impl MessageSender {
 }
 
 impl Env<State> for MessageSender {
-    fn step_(&self, s: State, action: u8, _task_id: i32) -> Result<Vec<(State, f32, String)>, String> {
+    fn step_(&self, s: State, action: u8, _task_id: i32, _agent_id: i32) -> Result<Vec<(State, f32, String)>, String> {
         let transition: Result<Vec<(State, f32, String)>, String> = match s {
             0 => {
                 // return the transition for state 0
@@ -101,7 +106,7 @@ impl Env<State> for MessageSender {
         self.action_space.to_vec()
     }
 
-    fn get_states_len(&self) -> usize {
+    fn get_states_len(&self, _agent_id: i32) -> usize {
         self.states.len()
     }
 }
@@ -123,6 +128,101 @@ where MessageSender: Env<State> {
         model.num_agents + model.tasks.size, 
         &model.actions
     );
+}
+
+#[pyfunction]
+pub fn test_build_mamdp(
+    model: &SCPM,
+    env: &MessageSender
+) -> () 
+where MessageSender: Env<State> {
+    let initial_state: MAMDPState<State> = MAMDPState {
+        S: (0..model.num_agents).map(|a| env.get_init_state(a)).collect(),
+        Q: vec![0; model.tasks.size],
+        R: (0..model.tasks.size as i32).collect(),
+        Active: crate::model::mamdp::Active { A: None, T: None }
+    };
+    let alloc_acts: Vec<i32> = (0..(model.tasks.size*model.num_agents) as i32).collect();
+    let agent_acts: Vec<i32> = model.actions.iter()
+        .map(|a| a + (model.num_agents * model.tasks.size) as i32)
+        .collect();
+    let actions = [&alloc_acts[..], &agent_acts[..]].concat();
+    let _mamdp = MOMAMDP_bfs(
+        initial_state, 
+        env, 
+        model.tasks.size, 
+        model.num_agents, 
+        model.tasks.size + model.num_agents, 
+        model, 
+        &actions
+    );
+}
+
+#[pyfunction]
+pub fn test_build_scpm(
+    model: &SCPM,
+    env: &MAS,
+) -> () 
+where MessageSender: Env<State> {
+    let initial_state: SCPMState<State> = (
+        env.agents[0].initial_state,
+        model.tasks.get_task(0).initial_state,
+        0,
+        0
+    );
+    let alloc_acts: Vec<i32> = (0..2).collect();
+    let agent_acts: Vec<i32> = model.actions.iter()
+        .map(|a| a + 2)
+        .collect();
+    let actions = [&alloc_acts[..], &agent_acts[..]].concat();
+    let _scpm = SCPM_bfs(
+        initial_state, 
+        env, 
+        model.num_agents, 
+        model.tasks.size, 
+        model.tasks.size + model.num_agents, 
+        model, 
+        &actions,
+        &env.get_init_states()[..]
+    );
+
+    //println!("R\n:{:?}", _scpm.R.to_dense());
+    //println!("P\n:{:?}", _scpm.P.to_dense());
+}
+
+#[pyfunction]
+pub fn test_build_stapu(
+    model: &SCPM,
+    env: &MAS,
+) -> () 
+where MessageSender: Env<State> {
+    let initial_state = StapuState {
+        s: env.get_init_state(0),
+        Q: (0..model.tasks.size).map(
+            |t| model.tasks.get_task(t).initial_state
+            ).collect(),
+        agentid: 0,
+        active_tasks: None,
+        remaining: (0..model.tasks.size as i32).collect()
+    };
+    let alloc_acts: Vec<i32> = (0..model.tasks.size as i32 + 1).collect();
+    let agent_acts: Vec<i32> = model.actions.iter()
+        .map(|a| a + model.tasks.size as i32 + 1)
+        .collect();
+    let actions = [&alloc_acts[..], &agent_acts[..]].concat();
+    let _scpm = MOSTAPU_bfs(
+        initial_state, 
+        env, 
+        model.num_agents, 
+        model.tasks.size, 
+        model.tasks.size + model.num_agents, 
+        model, 
+        &actions,
+        &env.get_init_states()[..]
+    );
+
+    //println!("R\n:{:?}", _scpm.R.to_dense());
+    //println!("P\n:{:?}", _scpm.P.to_dense());
 }
 
 #[pyfunction]
@@ -798,4 +898,292 @@ println!(
     );
 
     println!("Synthesis run time: {}", t2.elapsed().as_secs_f32());
+}
+
+#[pyfunction]
+pub fn motap_msg_test_cpu(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>,
+    eps: f32,
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
+) {
+println!("--------------------------");
+println!("     MOTAP CPU TEST       ");
+println!("--------------------------");
+
+    let t1 = Instant::now();
+    let dbug = debug_level(debug);
+    //model.construct_products(&mut mdp);
+    let pairs = 
+        product(0..model.num_agents, 0..model.tasks.size);
+    let models_ls: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
+        let pmdp = product_mdp_bfs(
+            (env.get_init_state(a), 0), 
+            env,
+            &model.tasks.get_task(t), 
+            a as i32, 
+            t as i32, 
+            model.num_agents, 
+            model.num_agents + model.tasks.size,
+            &model.actions
+        );
+        pmdp
+    }).collect(); 
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+                models_ls.len(), t1.elapsed().as_secs_f32(),
+                models_ls.iter().fold(0, |acc, m| acc + m.states.len()),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+            );
+        }
+    }
+
+    let result = motap_cpu_only_solver(&models_ls, model.num_agents, 
+                                            model.tasks.size, &w, eps, dbug, max_iter, max_unstable);
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+            println!("result: {:?}", result);
+        }
+    }
+}
+
+#[pyfunction]
+pub fn motap_mamdp_msg_test_cpu(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>,
+    eps: f32,
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32
+) {
+println!("--------------------------");
+println!("   MOTAP MAMDP CPU TEST   ");
+println!("--------------------------");
+
+    let t1 = Instant::now();
+    let dbug = debug_level(debug);
+    let initial_state: MAMDPState<State> = MAMDPState {
+        S: (0..model.num_agents).map(|a| env.get_init_state(a)).collect(),
+        Q: vec![0; model.tasks.size],
+        R: (0..model.tasks.size as i32).collect(),
+        Active: crate::model::mamdp::Active { A: None, T: None }
+    };
+    let alloc_acts: Vec<i32> = (0..(model.tasks.size*model.num_agents) as i32).collect();
+    let agent_acts: Vec<i32> = model.actions.iter()
+        .map(|a| a + (model.num_agents * model.tasks.size) as i32)
+        .collect();
+    let actions = [&alloc_acts[..], &agent_acts[..]].concat();
+    let mamdp = MOMAMDP_bfs(
+        initial_state, 
+        env, 
+        model.tasks.size, 
+        model.num_agents, 
+        model.tasks.size + model.num_agents, 
+        model, 
+        &actions
+    );
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Time to create mamdp model: {}\n|S|: {},\n|P|: {}", 
+                t1.elapsed().as_secs_f32(),
+                mamdp.states.len(),
+                mamdp.P.nnz()
+            );
+        }
+    }
+
+    let result = mamdp_cpu_solver(&mamdp, model.num_agents, 
+        model.tasks.size, &w, eps, dbug, max_iter, max_unstable);
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Total runtime {}", t1.elapsed().as_secs_f32());
+            println!("result: {:?}", result);
+        }
+    }
+}
+
+#[pyfunction]
+pub fn motap_mamdp_synthesis_test(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>,
+    target: Vec<f32>,
+    epsilon1: f32,
+    epsilon2: f32,
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32,
+    constraint_threshold: Vec<f32>
+) {
+    println!("--------------------------");
+    println!(" MAMDP MOTAP SYNTH TEST   ");
+    println!("--------------------------");
+    let t1 = Instant::now();
+    let dbug = debug_level(debug);
+    //model.construct_products(&mut mdp);
+
+    let initial_state: MAMDPState<State> = MAMDPState {
+        S: (0..model.num_agents).map(|a| env.get_init_state(a)).collect(),
+        Q: vec![0; model.tasks.size],
+        R: (0..model.tasks.size as i32).collect(),
+        Active: crate::model::mamdp::Active { A: None, T: None }
+    };
+    let alloc_acts: Vec<i32> = (0..(model.tasks.size*model.num_agents) as i32).collect();
+    let agent_acts: Vec<i32> = model.actions.iter()
+        .map(|a| a + (model.num_agents * model.tasks.size) as i32)
+        .collect();
+    let actions = [&alloc_acts[..], &agent_acts[..]].concat();
+
+    let mamdp = MOMAMDP_bfs(
+        initial_state, 
+        env, 
+        model.tasks.size, 
+        model.num_agents, 
+        model.tasks.size + model.num_agents, 
+        model, 
+        &actions
+    );
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Time to create mamdp model: {}\n|S|: {},\n|P|: {}", 
+                t1.elapsed().as_secs_f32(),
+                mamdp.states.len(),
+                mamdp.P.nnz()
+            );
+        }
+    }
+
+    let t2 = Instant::now();
+
+    let res = mamdp_scheduler_synthesis(
+        &mamdp, model.num_agents, model.tasks.size, w, &target, 
+        epsilon1, epsilon2, dbug, max_iter, max_unstable,
+        &constraint_threshold
+    );
+
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            match res {
+                Ok((X, rt, l, v)) => {
+                    let avg_rt = rt.iter().fold(0., |acc, x| acc + x)/ rt.len() as f32;
+                    if v.is_some() {
+                        let v_ = v.unwrap();
+                        // compute the total expected cost for the MAS
+                        let cost: f32 = X.iter().map(|(k, r)| 
+                            r[0..model.num_agents].iter()
+                                .enumerate()
+                                .fold(0_f32, |acc, (i, x)| acc + *x * v_[i])
+                        ).sum();
+                        println!("MAS cost under v: {}", cost);
+                    } else {
+                        println!("No randomised allocation function meets target threshold!");
+                    }
+                    println!("Average loop run time: {}", avg_rt);
+                    println!("Number of iterations: {}", l); 
+                    println!("Synthesis total run time: {}", t2.elapsed().as_secs_f32());
+                } 
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                }
+            }
+            
+        }
+    }
+}
+
+
+#[pyfunction]
+pub fn motap_synthesis_test(
+    model: &SCPM,
+    env: &MessageSender,
+    w: Vec<f32>,
+    target: Vec<f32>,
+    epsilon1: f32,
+    epsilon2: f32,
+    debug: i32,
+    max_iter: usize,
+    max_unstable: i32,
+    constraint_threshold: Vec<f32>
+) {
+    println!("--------------------------");
+    println!("   MOTAP SYNTH TEST       ");
+    println!("--------------------------");
+    let t1 = Instant::now();
+    let dbug = debug_level(debug);
+    //model.construct_products(&mut mdp);
+    let pairs = 
+        product(0..model.num_agents, 0..model.tasks.size);
+    let models_ls: Vec<MOProductMDP<State>> = pairs.into_par_iter().map(|(a, t)| {
+        let pmdp = product_mdp_bfs(
+            (env.get_init_state(a), 0), 
+            env,
+            &model.tasks.get_task(t), 
+            a as i32, 
+            t as i32, 
+            model.num_agents, 
+            model.num_agents + model.tasks.size,
+            &model.actions
+        );
+        pmdp
+    }).collect(); 
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            println!("Time to create {} models: {:?}\n|S|: {},\n|P|: {}", 
+                models_ls.len(), t1.elapsed().as_secs_f32(),
+                models_ls.iter().fold(0, |acc, m| acc + m.states.len()),
+                models_ls.iter().fold(0, |acc, m| acc + m.P.nnz())
+            );
+        }
+    }
+
+    let t2 = Instant::now();
+
+    let res = motap_scheduler_synthesis(
+        models_ls, model.num_agents, model.tasks.size, w, &target, 
+        epsilon1, epsilon2, dbug, max_iter, max_unstable,
+        &constraint_threshold
+    );
+
+    match dbug {
+        Debug::None => { }
+        _ => { 
+            match res {
+                Ok((X, rt, l, v)) => {
+                    let avg_rt = rt.iter().fold(0., |acc, x| acc + x)/ rt.len() as f32;
+                    if v.is_some() {
+                        let v_ = v.unwrap();
+                        // compute the total expected cost for the MAS
+                        let cost: f32 = X.iter().map(|(k, r)| 
+                            r[0..model.num_agents].iter()
+                                .enumerate()
+                                .fold(0_f32, |acc, (i, x)| acc + *x * v_[i])
+                        ).sum();
+                        println!("MAS cost under v: {}", cost);
+                    } else {
+                        println!("No randomised allocation function meets target threshold!");
+                    }
+                    println!("Average loop run time: {}", avg_rt);
+                    println!("Number of iterations: {}", l); 
+                    println!("Synthesis total run time: {}", t2.elapsed().as_secs_f32());
+                } 
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                }
+            }
+            
+        }
+    }
 }
